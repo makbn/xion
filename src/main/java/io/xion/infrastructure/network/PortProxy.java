@@ -37,6 +37,10 @@ public final class PortProxy implements AutoCloseable {
         this.targetHost = host;
     }
 
+    public String targetHost() {
+        return targetHost;
+    }
+
     /**
      * Listen on host ports and reverse-proxy TCP to {@code targetHost}:containerPort.
      */

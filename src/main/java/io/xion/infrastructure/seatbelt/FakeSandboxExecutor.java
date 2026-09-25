@@ -20,6 +20,7 @@ public class FakeSandboxExecutor implements SandboxExecutor {
 
     private final AtomicLong nextPid = new AtomicLong(10_000);
     private final List<SpawnedProcess> spawned = new ArrayList<>();
+    private final List<Map<String, String>> spawnedEnvs = new ArrayList<>();
 
     @Override
     public SpawnedProcess spawn(Path profileFile, String binary, List<String> args, Path workDir,
@@ -38,8 +39,12 @@ public class FakeSandboxExecutor implements SandboxExecutor {
         }
         ProcessBuilder pb = new ProcessBuilder(command);
         pb.directory(workDir.toFile());
-        if (env != null && !env.isEmpty()) {
-            pb.environment().putAll(env);
+        Map<String, String> envCopy = env == null ? Map.of() : Map.copyOf(env);
+        synchronized (spawnedEnvs) {
+            spawnedEnvs.add(envCopy);
+        }
+        if (!envCopy.isEmpty()) {
+            pb.environment().putAll(envCopy);
         }
         if (stdoutLog != null) {
             pb.redirectOutput(stdoutLog.toFile());
@@ -69,9 +74,24 @@ public class FakeSandboxExecutor implements SandboxExecutor {
         }
     }
 
+    public List<Map<String, String>> spawnedEnvs() {
+        synchronized (spawnedEnvs) {
+            return List.copyOf(spawnedEnvs);
+        }
+    }
+
+    public Map<String, String> lastEnv() {
+        synchronized (spawnedEnvs) {
+            return spawnedEnvs.isEmpty() ? Map.of() : spawnedEnvs.getLast();
+        }
+    }
+
     public void clear() {
         synchronized (spawned) {
             spawned.clear();
+        }
+        synchronized (spawnedEnvs) {
+            spawnedEnvs.clear();
         }
     }
 }

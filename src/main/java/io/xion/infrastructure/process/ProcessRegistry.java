@@ -31,6 +31,10 @@ public class ProcessRegistry {
         proxies.put(containerId, proxy);
     }
 
+    public Optional<io.xion.infrastructure.network.PortProxy> getProxy(String containerId) {
+        return Optional.ofNullable(proxies.get(containerId));
+    }
+
     public Optional<io.xion.infrastructure.network.PortProxy> removeProxy(String containerId) {
         return Optional.ofNullable(proxies.remove(containerId));
     }

@@ -42,6 +42,9 @@ class LifecycleIntegrationTest {
     @Inject
     io.xion.presentation.cli.DaemonClientSupport client;
 
+    @Inject
+    io.xion.infrastructure.network.BridgeResolver bridges;
+
     @BeforeEach
     void setUp() throws Exception {
         fakeSandboxExecutor.clear();
@@ -124,5 +127,70 @@ class LifecycleIntegrationTest {
         assertThat(all.containers()).anyMatch(c -> c.name().equals(name));
         ListContainersResult running = mediator.send(new ListContainersQuery(false));
         assertThat(running.containers()).noneMatch(c -> c.name().equals(name));
+    }
+
+    @Test
+    void networkCreateWithSubnetShowsGatewayAndMemberIps() throws Exception {
+        String net = "subnet-" + UUID.randomUUID().toString().substring(0, 8);
+        String subnet = "10.89.42.0/24";
+        CreateNetworkResult createdNet = mediator.send(new CreateNetworkCommand(net, subnet));
+        assertThat(createdNet.subnet()).isEqualTo(subnet);
+        assertThat(createdNet.gateway()).isEqualTo("10.89.42.1");
+
+        ListNetworksResult listed = mediator.send(new ListNetworksQuery());
+        assertThat(listed.networks()).anySatisfy(n -> {
+            assertThat(n.name()).isEqualTo(net);
+            assertThat(n.subnet()).isEqualTo(subnet);
+            assertThat(n.gateway()).isEqualTo("10.89.42.1");
+        });
+
+        int host1 = freePort();
+        int host2 = freePort();
+        String app1 = "a1-" + UUID.randomUUID().toString().substring(0, 6);
+        String app2 = "a2-" + UUID.randomUUID().toString().substring(0, 6);
+
+        CreateContainerResult c1 = mediator.send(new CreateContainerCommand(
+                app1, "sleep", List.of("3"), List.of(),
+                List.of(new io.xion.domain.PortMapping(host1, 8087, "tcp")),
+                Optional.of(net), ResourceLimits.unlimited()));
+        CreateContainerResult c2 = mediator.send(new CreateContainerCommand(
+                app2, "sleep", List.of("3"), List.of(),
+                List.of(new io.xion.domain.PortMapping(host2, 8087, "tcp")),
+                Optional.of(net), ResourceLimits.unlimited()));
+
+        StartContainerResult s1 = mediator.send(new StartContainerCommand(c1.id()));
+        StartContainerResult s2 = mediator.send(new StartContainerCommand(c2.id()));
+        assertThat(s1.status()).isEqualTo("RUNNING");
+        assertThat(s2.status()).isEqualTo("RUNNING");
+
+        assertThat(bridges.ipOf(app1)).contains("10.89.42.2");
+        assertThat(bridges.ipOf(app2)).contains("10.89.42.3");
+        assertThat(bridges.endpointOf(app1)).contains("10.89.42.2:8087");
+        assertThat(bridges.endpointOf(app2)).contains("10.89.42.3:8087");
+
+        InspectNetworkResult inspected = mediator.send(new InspectNetworkQuery(net));
+        assertThat(inspected.subnet()).isEqualTo(subnet);
+        assertThat(inspected.gateway()).isEqualTo("10.89.42.1");
+        assertThat(inspected.memberIps()).containsEntry(app1, "10.89.42.2").containsEntry(app2, "10.89.42.3");
+        assertThat(inspected.endpoints()).containsEntry(app1, "10.89.42.2:8087");
+
+        // profile JSON should record allocated IP
+        var rec1 = store.findById(c1.id()).orElseThrow();
+        assertThat(mapper.readTree(rec1.profileJson()).path("ip").asText()).isEqualTo("10.89.42.2");
+
+        mediator.send(new StopContainerCommand(c1.id()));
+        assertThat(bridges.ipOf(app1)).isEmpty();
+        assertThat(bridges.endpointOf(app1)).isEmpty();
+        // app2 still holds .3; released .2 can be reused later
+        assertThat(bridges.ipOf(app2)).contains("10.89.42.3");
+
+        mediator.send(new StopContainerCommand(c2.id()));
+        assertThat(bridges.ipOf(app2)).isEmpty();
+    }
+
+    private static int freePort() throws Exception {
+        try (java.net.ServerSocket probe = new java.net.ServerSocket(0)) {
+            return probe.getLocalPort();
+        }
     }
 }
