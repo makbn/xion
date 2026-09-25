@@ -16,17 +16,26 @@ import picocli.CommandLine;
                 "handlers, Seatbelt profile generation, port proxies, and SQLite store.",
                 "All other CLI commands are thin IPC clients and require the daemon.",
                 "",
-                "start  Bind the UDS and block in the foreground (run under a service manager",
-                "       or a dedicated terminal). Stop with SIGTERM.",
-                "stop   Probe daemon reachability and print how to signal it."
+                "start      Detach into the background by default (pidfile ~/.xion/xion.pid).",
+                "stop       SIGTERM the daemon via the pidfile.",
+                "install    launchd KeepAlive agent (macOS) — survives reboot/kill -9.",
+                "uninstall  Remove the launchd agent.",
+                "doctor     Pidfile / socket / launchd / stale-sock checks."
         },
         footer = {
-                "  xion daemon start",
-                "  # elsewhere:",
+                "  xion daemon install   # always-on hosts",
+                "  xion daemon start     # or one-shot background without launchd",
                 "  xion ps",
-                "  kill -TERM $(pgrep -f 'xion.*daemon')"
+                "  xion daemon doctor",
+                "  xion daemon stop"
         },
-        subcommands = {DaemonStartCommand.class, DaemonStopCommand.class})
+        subcommands = {
+                DaemonStartCommand.class,
+                DaemonStopCommand.class,
+                DaemonInstallCommand.class,
+                DaemonUninstallCommand.class,
+                DaemonDoctorCommand.class
+        })
 public class DaemonCommand implements Runnable {
 
     @CommandLine.Spec
