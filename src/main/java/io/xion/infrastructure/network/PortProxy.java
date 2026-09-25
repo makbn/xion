@@ -15,36 +15,42 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Host → container TCP reverse proxy for {@code -p HOST:CONTAINER}.
  * <p>
- * Designed for bulk transfers (multi‑MB responses, parallel streams): accept is
- * non-blocking per published port; each connection is handed to a worker that
- * copies with large direct buffers, socket buffer tuning, and idle timeouts.
- * This is still userspace copy — not kernel port publish — but avoids the old
- * single-threaded 8KB select-loop bottleneck.
+ * Userspace byte pump (not kernel publish). Bounded connection workers, large direct
+ * buffers, and connect/idle timeouts. Tunables via {@code -Dxion.proxy.max-connections}
+ * and {@code -Dxion.proxy.accept-backlog}.
  */
 public final class PortProxy implements AutoCloseable {
 
     private static final Logger LOG = Logger.getLogger(PortProxy.class);
 
-    static final int CONNECT_TIMEOUT_MS = 5_000;
-    static final long IDLE_TIMEOUT_MS = 120_000;
-    /** Pipe chunk size — large enough for multi‑MB segment fan-out without syscall storms. */
-    static final int PIPE_BUFFER_BYTES = 256 * 1024;
-    static final int SOCKET_BUFFER_BYTES = 1024 * 1024;
+    static final int CONNECT_TIMEOUT_MS = Integer.getInteger("xion.proxy.connect-timeout-ms", 5_000);
+    static final long IDLE_TIMEOUT_MS = Long.getLong("xion.proxy.idle-timeout-ms", 120_000L);
+    static final int PIPE_BUFFER_BYTES = Integer.getInteger("xion.proxy.pipe-buffer-bytes", 256 * 1024);
+    static final int SOCKET_BUFFER_BYTES = Integer.getInteger("xion.proxy.socket-buffer-bytes", 1024 * 1024);
+    static final int MAX_CONNECTIONS = Integer.getInteger("xion.proxy.max-connections", 256);
+    static final int ACCEPT_BACKLOG = Integer.getInteger("xion.proxy.accept-backlog", 512);
 
     private final Map<Integer, ServerSocketChannel> listeners = new ConcurrentHashMap<>();
     private final Map<Integer, Integer> hostToContainer = new ConcurrentHashMap<>();
     private final Map<Integer, ExecutorService> acceptors = new ConcurrentHashMap<>();
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicLong hungUpstreamCloses = new AtomicLong();
-    private ExecutorService workers;
+    private final AtomicLong rejectedConnections = new AtomicLong();
+    private final AtomicLong bytesProxied = new AtomicLong();
+    private final AtomicInteger activeConnections = new AtomicInteger();
+    private final AtomicLong acceptedConnections = new AtomicLong();
+    private ThreadPoolExecutor workers;
     private String targetHost = "127.0.0.1";
 
     public void setTargetHost(String host) {
@@ -59,6 +65,27 @@ public final class PortProxy implements AutoCloseable {
         return hungUpstreamCloses.get();
     }
 
+    public Stats stats() {
+        return new Stats(
+                activeConnections.get(),
+                acceptedConnections.get(),
+                hungUpstreamCloses.get(),
+                rejectedConnections.get(),
+                bytesProxied.get(),
+                MAX_CONNECTIONS,
+                Map.copyOf(hostToContainer));
+    }
+
+    public record Stats(
+            int activeConnections,
+            long acceptedConnections,
+            long hungUpstreamCloses,
+            long rejectedConnections,
+            long bytesProxied,
+            int maxConnections,
+            Map<Integer, Integer> mappings) {
+    }
+
     public synchronized void start(List<PortMapping> mappings, String targetHost) throws IOException {
         setTargetHost(targetHost == null || targetHost.isBlank() ? "127.0.0.1" : targetHost);
         start(mappings);
@@ -68,11 +95,18 @@ public final class PortProxy implements AutoCloseable {
         if (running.get()) {
             stop();
         }
-        workers = Executors.newCachedThreadPool(r -> {
-            Thread t = new Thread(r, "xion-port-proxy-pipe");
-            t.setDaemon(true);
-            return t;
-        });
+        workers = new ThreadPoolExecutor(
+                Math.min(32, MAX_CONNECTIONS),
+                MAX_CONNECTIONS,
+                60L,
+                TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(MAX_CONNECTIONS),
+                r -> {
+                    Thread t = new Thread(r, "xion-port-proxy-conn");
+                    t.setDaemon(true);
+                    return t;
+                },
+                new ThreadPoolExecutor.AbortPolicy());
         running.set(true);
         for (PortMapping mapping : mappings) {
             if (!"tcp".equalsIgnoreCase(mapping.protocol())) {
@@ -86,7 +120,7 @@ public final class PortProxy implements AutoCloseable {
             } catch (IOException ignored) {
                 // optional
             }
-            server.bind(new InetSocketAddress("0.0.0.0", mapping.hostPort()), 512);
+            server.bind(new InetSocketAddress("0.0.0.0", mapping.hostPort()), ACCEPT_BACKLOG);
             listeners.put(mapping.hostPort(), server);
             hostToContainer.put(mapping.hostPort(), mapping.containerPort());
 
@@ -100,8 +134,13 @@ public final class PortProxy implements AutoCloseable {
             int containerPort = mapping.containerPort();
             acceptor.submit(() -> acceptLoop(server, hostPort, containerPort));
         }
-        LOG.infof("Port proxy listening on %s → %s (per-conn workers, %dKiB buffers)",
-                hostToContainer.keySet(), targetHost, PIPE_BUFFER_BYTES / 1024);
+        LOG.infof(
+                "Port proxy listening on %s → %s (maxConns=%d backlog=%d pipe=%dKiB)",
+                hostToContainer.keySet(),
+                targetHost,
+                MAX_CONNECTIONS,
+                ACCEPT_BACKLOG,
+                PIPE_BUFFER_BYTES / 1024);
     }
 
     private void acceptLoop(ServerSocketChannel server, int hostPort, int containerPort) {
@@ -114,6 +153,9 @@ public final class PortProxy implements AutoCloseable {
                 try {
                     workers.submit(() -> handleConnection(client, containerPort));
                 } catch (RejectedExecutionException e) {
+                    rejectedConnections.incrementAndGet();
+                    LOG.warnf("Port proxy rejecting connection on %d — at max-connections (%d)",
+                            hostPort, MAX_CONNECTIONS);
                     closeQuietly(client);
                 }
             } catch (ClosedChannelException e) {
@@ -127,6 +169,8 @@ public final class PortProxy implements AutoCloseable {
     }
 
     private void handleConnection(SocketChannel client, int containerPort) {
+        activeConnections.incrementAndGet();
+        acceptedConnections.incrementAndGet();
         SocketChannel upstream = null;
         try {
             tuneSocket(client);
@@ -136,25 +180,12 @@ public final class PortProxy implements AutoCloseable {
 
             SocketChannel up = upstream;
             SocketChannel cl = client;
-            var done = new java.util.concurrent.CountDownLatch(2);
-            workers.submit(() -> {
-                try {
-                    pipeOneWay(cl, up);
-                } finally {
-                    done.countDown();
-                }
-            });
-            workers.submit(() -> {
-                try {
-                    pipeOneWay(up, cl);
-                } finally {
-                    done.countDown();
-                }
-            });
-            if (!done.await(IDLE_TIMEOUT_MS * 2, TimeUnit.MILLISECONDS)) {
-                hungUpstreamCloses.incrementAndGet();
-                LOG.warnf("Port proxy connection exceeded idle budget to %s:%d", targetHost, containerPort);
-            }
+            // Pipe threads are not taken from the bounded pool (avoids deadlock).
+            Thread reverse = new Thread(() -> pipeOneWay(up, cl), "xion-proxy-up2down");
+            reverse.setDaemon(true);
+            reverse.start();
+            pipeOneWay(cl, up);
+            reverse.join(IDLE_TIMEOUT_MS * 2);
         } catch (IOException e) {
             hungUpstreamCloses.incrementAndGet();
             LOG.debugf("Port proxy connection closed (%s:%d): %s", targetHost, containerPort, e.getMessage());
@@ -163,6 +194,7 @@ public final class PortProxy implements AutoCloseable {
         } finally {
             closeQuietly(client);
             closeQuietly(upstream);
+            activeConnections.decrementAndGet();
         }
     }
 
@@ -196,6 +228,7 @@ public final class PortProxy implements AutoCloseable {
                     continue;
                 }
                 lastActivity = System.nanoTime();
+                bytesProxied.addAndGet(read);
                 buf.flip();
                 while (buf.hasRemaining()) {
                     dst.write(buf);

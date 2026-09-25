@@ -245,7 +245,19 @@ public class IpcDispatcher {
                     .put("restartRequired", r.restartRequired());
         }
         if (result instanceof InspectContainerResult r) {
-            return containerNode(r.container());
+            ObjectNode n = containerNode(r.container());
+            r.proxyStats().ifPresent(stats -> {
+                ObjectNode proxy = n.putObject("proxy");
+                proxy.put("activeConnections", stats.activeConnections());
+                proxy.put("acceptedConnections", stats.acceptedConnections());
+                proxy.put("hungUpstreamCloses", stats.hungUpstreamCloses());
+                proxy.put("rejectedConnections", stats.rejectedConnections());
+                proxy.put("bytesProxied", stats.bytesProxied());
+                proxy.put("maxConnections", stats.maxConnections());
+                ObjectNode maps = proxy.putObject("mappings");
+                stats.mappings().forEach((h, c) -> maps.put(Integer.toString(h), c));
+            });
+            return n;
         }
         if (result instanceof InspectNetworkResult r) {
             ObjectNode root = mapper.createObjectNode();
