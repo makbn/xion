@@ -5,13 +5,30 @@ import picocli.CommandLine;
 
 import java.util.concurrent.Callable;
 
-@CommandLine.Command(name = "create", description = "Create a bridge network")
+@CommandLine.Command(
+        name = "create",
+        mixinStandardHelpOptions = true,
+        synopsisHeading = "%nUsage:%n  ",
+        descriptionHeading = "%nDescription:%n%n",
+        parameterListHeading = "%nArguments:%n%n",
+        footerHeading = "%nExamples:%n%n",
+        description = {
+                "Create a named bridge network in the daemon registry.",
+                "",
+                "Idempotent if the name already exists. Drivers, IPAM, and labels from",
+                "`docker network create` are not supported — drop them via",
+                "`xion docker --allow-partial -- network create …`."
+        },
+        footer = {
+                "  xion network create frontend"
+        })
 public class NetworkCreateCommand implements Callable<Integer> {
 
     @Inject
     DaemonClientSupport client;
 
-    @CommandLine.Parameters(index = "0")
+    @CommandLine.Parameters(index = "0", paramLabel = "NAME",
+            description = "Bridge network name.")
     String name;
 
     @CommandLine.Spec

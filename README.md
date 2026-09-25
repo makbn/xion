@@ -61,6 +61,38 @@ Native flags are set in `application.properties`:
 
 - `quarkus.native.additional-build-args=--no-fallback,...`
 
+## CLI help
+
+Every command has Docker-style detailed help (description, options, examples):
+
+```bash
+java -jar target/quarkus-app/quarkus-run.jar --help
+java -jar target/quarkus-app/quarkus-run.jar run --help
+java -jar target/quarkus-app/quarkus-run.jar docker --help
+java -jar target/quarkus-app/quarkus-run.jar help network
+```
+
+### Docker → Xion translator
+
+`xion docker` (aliases: `from-docker`, `compat`) accepts a Docker command, shows the
+mapped Xion argv, asks for approval, then executes:
+
+```bash
+# Interactive
+java -jar target/quarkus-app/quarkus-run.jar docker -- run -d --name web -p 8080:80 nginx
+
+# Skip confirmation + allow unsupported flags to be dropped
+java -jar target/quarkus-app/quarkus-run.jar docker --yes --allow-partial -- \
+  run -it --rm -e FOO=1 -p 8080:80 --memory 256m nginx:latest
+
+# Preview only / skip bad port specs
+java -jar target/quarkus-app/quarkus-run.jar docker --dry-run --allow-partial --partial-ports -- \
+  run -p 80 -p 9000:90 /usr/bin/sleep 30
+```
+
+Useful flags: `--yes`/`-y`, `--dry-run`, `--print-only`, `--allow-partial`,
+`--drop-unsupported`, `--partial-ports`, `--keep-image-tag`.
+
 ## Example workflow
 
 ```bash

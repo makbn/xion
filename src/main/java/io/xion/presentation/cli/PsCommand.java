@@ -5,7 +5,27 @@ import picocli.CommandLine;
 
 import java.util.concurrent.Callable;
 
-@CommandLine.Command(name = "ps", description = "List containers")
+@CommandLine.Command(
+        name = "ps",
+        mixinStandardHelpOptions = true,
+        synopsisHeading = "%nUsage:%n  ",
+        descriptionHeading = "%nDescription:%n%n",
+        footerHeading = "%nExamples:%n%n",
+        description = {
+                "List all containers known to the daemon (any status).",
+                "",
+                "Columns: ID, NAME, STATUS, BINARY. Status values: CREATED, RUNNING,",
+                "STOPPED, EXITED. Data comes from SQLite via the daemon UDS API.",
+                "",
+                "Docker filters (-a, -q, --filter) are not supported; translate with",
+                "`xion docker --allow-partial -- ps -a` to drop them.",
+                "",
+                "Requires a running daemon."
+        },
+        footer = {
+                "  xion ps",
+                "  xion docker --yes --allow-partial -- ps -a"
+        })
 public class PsCommand implements Callable<Integer> {
 
     @Inject

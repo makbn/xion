@@ -3,7 +3,18 @@ package io.xion.presentation.cli;
 import jakarta.inject.Inject;
 import picocli.CommandLine;
 
-@CommandLine.Command(name = "stop", description = "Check daemon reachability / instruct stop")
+@CommandLine.Command(
+        name = "stop",
+        mixinStandardHelpOptions = true,
+        synopsisHeading = "%nUsage:%n  ",
+        descriptionHeading = "%nDescription:%n%n",
+        description = {
+                "Check that the daemon answers a ping on the UDS, then instruct you to",
+                "send SIGTERM to the daemon process (graceful shutdown hook calls stop).",
+                "",
+                "This does not kill containers by itself; stop containers first with",
+                "`xion stop` if needed."
+        })
 public class DaemonStopCommand implements Runnable {
 
     @Inject
