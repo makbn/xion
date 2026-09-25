@@ -1,0 +1,41 @@
+[
+  {
+    "name": "io.xion.infrastructure.ipc.IpcEnvelope",
+    "allDeclaredConstructors": true,
+    "allPublicConstructors": true,
+    "allDeclaredMethods": true,
+    "allPublicMethods": true,
+    "allDeclaredFields": true,
+    "allPublicFields": true
+  },
+  {
+    "name": "io.xion.application.handlers.CreateContainerCommand",
+    "allDeclaredConstructors": true,
+    "allPublicMethods": true
+  },
+  {
+    "name": "io.xion.application.handlers.StartContainerCommand",
+    "allDeclaredConstructors": true,
+    "allPublicMethods": true
+  },
+  {
+    "name": "io.xion.application.handlers.StopContainerCommand",
+    "allDeclaredConstructors": true,
+    "allPublicMethods": true
+  },
+  {
+    "name": "io.xion.application.handlers.LogsQuery",
+    "allDeclaredConstructors": true,
+    "allPublicMethods": true
+  },
+  {
+    "name": "io.xion.application.handlers.ListContainersQuery",
+    "allDeclaredConstructors": true,
+    "allPublicMethods": true
+  },
+  {
+    "name": "io.xion.application.handlers.CreateNetworkCommand",
+    "allDeclaredConstructors": true,
+    "allPublicMethods": true
+  }
+]
