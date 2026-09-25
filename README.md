@@ -74,12 +74,19 @@ java -jar target/quarkus-app/quarkus-run.jar help network
 
 ### Docker → Xion translator
 
-`xion docker` (aliases: `from-docker`, `compat`) accepts a Docker command, shows the
-mapped Xion argv, asks for approval, then executes:
+`xion docker` (aliases: `from-docker`, `compat`) accepts a Docker CLI command **or a
+Dockerfile**, shows the mapped Xion argv, asks for approval, then executes:
 
 ```bash
-# Interactive
+# Interactive from a docker run line
 java -jar target/quarkus-app/quarkus-run.jar docker -- run -d --name web -p 8080:80 nginx
+
+# From a Dockerfile (ENTRYPOINT/CMD → xion run)
+java -jar target/quarkus-app/quarkus-run.jar docker -f Dockerfile --name web --yes
+java -jar target/quarkus-app/quarkus-run.jar docker --dockerfile ./deploy/Dockerfile \
+  --dry-run --volume-host-root /srv/data
+java -jar target/quarkus-app/quarkus-run.jar docker -f Dockerfile --name api -- \
+  --memory 512m -p 8080:8080
 
 # Skip confirmation + allow unsupported flags to be dropped
 java -jar target/quarkus-app/quarkus-run.jar docker --yes --allow-partial -- \
@@ -90,8 +97,14 @@ java -jar target/quarkus-app/quarkus-run.jar docker --dry-run --allow-partial --
   run -p 80 -p 9000:90 /usr/bin/sleep 30
 ```
 
+Dockerfile mode maps **ENTRYPOINT + CMD** to `xion run`, optionally `EXPOSE` → `-p N:N`
+(`--publish-expose`), `VOLUME` → `-v` (`--volume-host-root DIR`), and `WORKDIR` via
+`sh -c 'cd … && exec …'`. Build layers (`FROM`/`RUN`/`COPY`/…) are not executed.
+
 Useful flags: `--yes`/`-y`, `--dry-run`, `--print-only`, `--allow-partial`,
-`--drop-unsupported`, `--partial-ports`, `--keep-image-tag`.
+`--drop-unsupported`, `--partial-ports`, `--keep-image-tag`,
+`-f`/`--dockerfile`, `--publish-expose` / `--no-publish-expose`, `--volume-host-root`,
+`--no-workdir`.
 
 ## Example workflow
 

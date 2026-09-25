@@ -1,6 +1,7 @@
 package io.xion.presentation.cli;
 
 import io.xion.presentation.cli.compat.DockerCommandTranslator;
+import io.xion.presentation.cli.compat.DockerfileTranslator;
 import jakarta.inject.Inject;
 import picocli.CommandLine;
 
@@ -8,16 +9,19 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
 
 /**
- * Accepts a Docker CLI invocation, translates it to Xion, prompts for approval, then executes.
+ * Accepts a Docker CLI invocation <em>or</em> a Dockerfile, translates the executable
+ * surface to Xion, prompts for approval, then executes.
  *
  * <pre>
  *   xion docker --yes --allow-partial -- run -d --name web -p 8080:80 nginx:latest
- *   xion docker --dry-run -- "docker run -p 80:80 --memory 256m /usr/bin/python3 -m http.server"
+ *   xion docker --dockerfile Dockerfile --yes --publish-expose --name api
+ *   xion docker -f ./Dockerfile --dry-run --volume-host-root /var/xion-data
  * </pre>
  */
 @CommandLine.Command(
@@ -31,30 +35,38 @@ import java.util.concurrent.Callable;
         parameterListHeading = "%nArguments:%n%n",
         footerHeading = "%nExamples:%n%n",
         description = {
-                "Translate a Docker CLI command into the equivalent Xion command, show the",
-                "mapping (including dropped/unsupported flags), ask for confirmation, then",
-                "execute via the local Xion CLI / daemon.",
+                "Translate a Docker CLI command — or the executable part of a Dockerfile —",
+                "into the equivalent Xion command, show the mapping (dropped/unsupported",
+                "flags and build-only layers), ask for confirmation, then execute.",
                 "",
-                "Xion is not a Docker engine: OCI images are mapped to host binaries, Seatbelt",
-                "replaces namespaces, and networking is loopback proxy + bridge DNS. Use",
-                "--allow-partial / --drop-unsupported / --partial-ports when the Docker",
-                "command cannot be mapped 1:1.",
+                "Modes:",
+                "  1) CLI:   xion docker -- run|ps|stop|… [docker flags…]",
+                "  2) File:  xion docker -f|--dockerfile PATH [options] [-- extra docker-run flags]",
+                "",
+                "Dockerfile mode reads ENTRYPOINT + CMD (exec or shell form), optionally maps",
+                "EXPOSE → -p N:N, VOLUME → -v (with --volume-host-root), and WORKDIR via",
+                "sh -c 'cd … && exec …'. FROM/RUN/COPY/ADD/ENV/USER/… are not executed;",
+                "they are listed as dropped/ignored because Xion runs host binaries.",
+                "",
+                "Xion is not a Docker engine. Use --allow-partial / --drop-unsupported /",
+                "--partial-ports when the mapping cannot be 1:1.",
                 "",
                 "Supported Docker verbs: run, create, start, stop, logs, ps, network create,",
                 "version, help."
         },
         footer = {
-                "  # Interactive approval",
+                "  # Interactive approval from a docker run line",
                 "  xion docker -- run -d --name api -p 8080:80 -v /data:/data --memory 512m nginx",
                 "",
-                "  # Skip confirmation (CI / scripts)",
+                "  # From a Dockerfile (ENTRYPOINT/CMD → xion run)",
+                "  xion docker -f Dockerfile --name web --publish-expose --yes",
+                "  xion docker --dockerfile ./deploy/Dockerfile --dry-run --volume-host-root /srv/data",
+                "",
+                "  # Dockerfile + extra publish / memory overrides",
+                "  xion docker -f Dockerfile --name api -- --memory 512m -p 8080:8080",
+                "",
+                "  # Skip confirmation + allow unsupported flags to be dropped",
                 "  xion docker --yes --allow-partial -- run -it --rm -e FOO=1 -p 80:80 httpd",
-                "",
-                "  # Preview only",
-                "  xion docker --dry-run -- \"docker ps -a\"",
-                "",
-                "  # Skip invalid port specs instead of failing",
-                "  xion docker --yes --partial-ports -- run -p 8080 -p 9000:90 /usr/bin/sleep 30",
                 "",
                 "Exit codes: 0 success, 1 translation/execution error, 2 user declined,",
                 "3 partial mapping refused (use --allow-partial)."
@@ -101,16 +113,72 @@ public class DockerCompatCommand implements Callable<Integer> {
 
     @CommandLine.Option(
             names = {"--quiet-drop", "-q"},
-            description = "Do not print dropped-flag / warning details (still shown on decline path).")
+            description = "Do not print dropped-flag / warning details.")
     boolean quietDrop;
+
+    @CommandLine.Option(
+            names = {"-f", "--dockerfile"},
+            paramLabel = "PATH",
+            description = {
+                    "Translate the executable part of a Dockerfile (ENTRYPOINT/CMD, plus optional",
+                    "EXPOSE/VOLUME/WORKDIR). Mutually exclusive with a leading docker verb unless",
+                    "extra run flags are passed after --."
+            })
+    Path dockerfile;
+
+    @CommandLine.Option(
+            names = {"--name"},
+            paramLabel = "NAME",
+            description = "Container name for Dockerfile mode (passed through as xion run --name).")
+    String name;
+
+    @CommandLine.Option(
+            names = {"--publish-expose"},
+            negatable = true,
+            defaultValue = "true",
+            fallbackValue = "true",
+            description = "Dockerfile mode: map each EXPOSE N to -p N:N (default: true). Use --no-publish-expose to skip.")
+    boolean publishExpose;
+
+    @CommandLine.Option(
+            names = {"--volume-host-root"},
+            paramLabel = "DIR",
+            description = "Dockerfile mode: map VOLUME /path → -v DIR/path:/path.")
+    String volumeHostRoot;
+
+    @CommandLine.Option(
+            names = {"--no-workdir"},
+            description = "Dockerfile mode: do not wrap the command with cd WORKDIR.")
+    boolean noWorkdir;
+
+    @CommandLine.Option(
+            names = {"--memory", "-m"},
+            paramLabel = "LIMIT",
+            description = "Dockerfile mode: memory limit for the generated run (e.g. 512m).")
+    String memory;
+
+    @CommandLine.Option(
+            names = {"--cpus"},
+            paramLabel = "FLOAT",
+            description = "Dockerfile mode: CPU limit for the generated run.")
+    Double cpus;
+
+    @CommandLine.Option(
+            names = {"--network"},
+            paramLabel = "NAME",
+            description = "Dockerfile mode: attach generated run to a bridge network.")
+    String network;
 
     @CommandLine.Parameters(
             index = "0..*",
-            arity = "1..*",
+            arity = "0..*",
             paramLabel = "DOCKER_ARGS",
             description = {
-                    "Docker command tokens, optionally beginning with the word 'docker'.",
-                    "Examples: run -p 8080:80 nginx   OR   \"docker stop web\""
+                    "Docker command tokens (CLI mode), optionally beginning with 'docker'.",
+                    "In Dockerfile mode, tokens after -- are extra docker-run flags merged in",
+                    "(e.g. -p 8080:80 --memory 256m). Examples:",
+                    "  run -p 8080:80 nginx",
+                    "  \"docker stop web\""
             })
     List<String> dockerArgs = new ArrayList<>();
 
@@ -118,11 +186,17 @@ public class DockerCompatCommand implements Callable<Integer> {
     CommandLine.Model.CommandSpec spec;
 
     private final DockerCommandTranslator translator = new DockerCommandTranslator();
+    private final DockerfileTranslator dockerfileTranslator = new DockerfileTranslator();
 
     @Override
     public Integer call() throws Exception {
         PrintWriter out = spec.commandLine().getOut();
         PrintWriter err = spec.commandLine().getErr();
+
+        if (dockerfile == null && (dockerArgs == null || dockerArgs.isEmpty())) {
+            err.println("Specify a docker command or --dockerfile PATH. See: xion docker --help");
+            return 1;
+        }
 
         DockerCommandTranslator.Options opts = new DockerCommandTranslator.Options();
         opts.allowPartial = allowPartial || dropUnsupported;
@@ -131,23 +205,40 @@ public class DockerCompatCommand implements Callable<Integer> {
         opts.stripImageTag = !keepImageTag;
 
         DockerCommandTranslator.Translation translation;
+        String inputLabel;
         try {
-            translation = translator.translate(dockerArgs, opts);
+            if (dockerfile != null) {
+                DockerfileTranslator.Options fileOpts = new DockerfileTranslator.Options();
+                fileOpts.publishExpose = publishExpose;
+                fileOpts.volumeHostRoot = volumeHostRoot;
+                fileOpts.honorWorkdir = !noWorkdir;
+                fileOpts.name = name;
+                fileOpts.memory = memory;
+                fileOpts.cpus = cpus;
+                fileOpts.network = network;
+                fileOpts.commandOptions = opts;
+                fileOpts.extraRunFlags = extractExtraRunFlags(dockerArgs);
+                translation = dockerfileTranslator.translate(dockerfile, fileOpts);
+                inputLabel = "Dockerfile " + dockerfile;
+            } else {
+                translation = translator.translate(dockerArgs, opts);
+                inputLabel = "docker " + String.join(" ", DockerCommandTranslator.normalize(dockerArgs));
+            }
         } catch (IllegalArgumentException ex) {
             err.println("docker→xion translation failed: " + ex.getMessage());
             err.println("Hint: pass --allow-partial, --drop-unsupported, and/or --partial-ports.");
-            err.println("      See: xion docker --help");
+            err.println("      For Dockerfiles: ensure ENTRYPOINT or CMD is set; see xion docker --help");
             return 1;
         }
 
         out.println("Docker → Xion translation");
         out.println("────────────────────────");
-        out.println("Input : docker " + String.join(" ", DockerCommandTranslator.normalize(dockerArgs)));
+        out.println("Input : " + inputLabel);
         out.println("Output: xion " + String.join(" ", translation.xionArgs()));
         out.println("Note  : " + translation.summary());
         if (!quietDrop) {
             if (!translation.dropped().isEmpty()) {
-                out.println("Dropped unsupported flags:");
+                out.println("Dropped / not applied:");
                 translation.dropped().forEach(d -> out.println("  - " + d));
             }
             if (!translation.warnings().isEmpty()) {
@@ -155,8 +246,7 @@ public class DockerCompatCommand implements Callable<Integer> {
                 translation.warnings().forEach(w -> out.println("  ! " + w));
             }
         }
-        if (translation.hasDropped() && !(allowPartial || dropUnsupported)) {
-            // Translator already throws in this case; belt-and-suspenders.
+        if (translation.hasDropped() && dockerfile == null && !(allowPartial || dropUnsupported)) {
             err.println("Refusing partial mapping without --allow-partial / --drop-unsupported.");
             return 3;
         }
@@ -184,12 +274,26 @@ public class DockerCompatCommand implements Callable<Integer> {
         String[] argv = translation.xionArgs().toArray(String[]::new);
         out.println("Executing: xion " + String.join(" ", argv));
         int code = root.execute(argv);
-        // Picocli returns command exit code; surface daemon connectivity hints
         if (code != 0 && needsDaemon(translation.xionArgs())) {
             err.println("Tip: ensure the daemon is running: xion daemon start");
             err.println("     socket: " + client.socketPath());
         }
         return code;
+    }
+
+    /**
+     * Remaining parameters in Dockerfile mode are treated as extra {@code docker run} flags.
+     * Leading {@code run}/{@code docker run} words are stripped.
+     */
+    static List<String> extractExtraRunFlags(List<String> raw) {
+        if (raw == null || raw.isEmpty()) {
+            return List.of();
+        }
+        List<String> args = new ArrayList<>(DockerCommandTranslator.normalize(raw));
+        if (!args.isEmpty() && "run".equalsIgnoreCase(args.getFirst())) {
+            args.removeFirst();
+        }
+        return List.copyOf(args);
     }
 
     private static boolean needsDaemon(List<String> args) {

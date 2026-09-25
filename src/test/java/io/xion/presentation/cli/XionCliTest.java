@@ -48,6 +48,8 @@ class XionCliTest {
         assertThat(out).contains("--allow-partial");
         assertThat(out).contains("--partial-ports");
         assertThat(out).contains("--dry-run");
+        assertThat(out).contains("--dockerfile");
+        assertThat(out).contains("--publish-expose");
         assertThat(out).contains("Examples:");
     }
 
