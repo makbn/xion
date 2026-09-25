@@ -9,6 +9,47 @@ container state in SQLite.
 This project builds and runs tests on any OS in JVM mode; Darwin-only tests are
 skipped on Linux.
 
+## Why Xion?
+
+Docker on a Mac does **not** run Linux containers on the Apple chip directly. It runs
+them inside a **Linux virtual machine**. That VM is great for “same Linux as
+production,” but it sits between your app and the real hardware.
+
+Because of that VM wall, workloads often **cannot use the full Apple Silicon stack**:
+Media Engine (hardware encode/decode), Neural Engine, Metal GPU, and other
+macOS-only accelerators stay on the host side. You pay VM overhead, and you miss
+the silicon features that make M-series Macs fast at video, ML, and graphics.
+
+Xion takes a different path: it runs **real macOS processes** on the host, fenced
+with **Seatbelt** sandboxes (plus port proxying and resource limits). No Linux VM
+in the middle — so your process can talk to the Media Engine and the rest of the
+chip the way a normal Mac app would.
+
+### Pros
+
+- **Uses the silicon** — Media Engine, GPU/Metal, Neural Engine, and other host
+  hardware are available to sandboxed processes (when the app supports them).
+- **Less overhead** — no Linux VM tax for CPU, memory, or I/O on every container.
+- **Mac-native feel** — Docker-ish CLI (`run`, `ps`, `logs`, `network`, `docker`
+  translator) while staying on Darwin APIs.
+- **Lighter isolation model** — Seatbelt profiles instead of a full guest OS.
+
+### Cons
+
+- **Not Linux containers** — you run host executables / Mac-oriented workflows, not
+  OCI Linux images from Docker Hub as-is. Production parity with Linux servers is
+  weaker than Docker Desktop.
+- **macOS Apple Silicon only** — Mandrel native builds and Seatbelt are Darwin/aarch64
+  focused; this is not a general Linux container engine.
+- **Weaker / different isolation** — Seatbelt is process sandboxing, not a VM or
+  full kernel namespace stack. Threat model differs from Docker-on-Linux.
+- **Smaller ecosystem** — no full Docker networking, volumes, or build pipeline;
+  `xion docker` translates what it can and drops the rest.
+
+**Rule of thumb:** use Docker when you need “same Linux as the cloud.” Use Xion when
+you want container-style lifecycle on a Mac **and** you care about Apple Silicon
+hardware (video, ML, GPU) without a VM in the way.
+
 ## Requirements
 
 | Tool | Version |
@@ -22,13 +63,6 @@ skipped on Linux.
 ```bash
 ./mvnw test
 ./mvnw package
-```
-
-Run the CLI (JVM):
-
-```bash
-java -jar target/quarkus-app/quarkus-run.jar --help
-java -jar target/quarkus-app/quarkus-run.jar version
 ```
 
 ## Native build (macOS Apple Silicon)
@@ -61,15 +95,18 @@ Native flags are set in `application.properties`:
 
 - `quarkus.native.additional-build-args=--no-fallback,...`
 
+Examples below assume the native binary is available as `./target/*-runner`
+(or copy/symlink it to `xion` on your `PATH`).
+
 ## CLI help
 
 Every command has Docker-style detailed help (description, options, examples):
 
 ```bash
-java -jar target/quarkus-app/quarkus-run.jar --help
-java -jar target/quarkus-app/quarkus-run.jar run --help
-java -jar target/quarkus-app/quarkus-run.jar docker --help
-java -jar target/quarkus-app/quarkus-run.jar help network
+./target/*-runner --help
+./target/*-runner run --help
+./target/*-runner docker --help
+./target/*-runner help network
 ```
 
 ### Docker → Xion translator
@@ -79,21 +116,21 @@ Dockerfile**, shows the mapped Xion argv, asks for approval, then executes:
 
 ```bash
 # Interactive from a docker run line
-java -jar target/quarkus-app/quarkus-run.jar docker -- run -d --name web -p 8080:80 nginx
+./target/*-runner docker -- run -d --name web -p 8080:80 nginx
 
 # From a Dockerfile (ENTRYPOINT/CMD → xion run)
-java -jar target/quarkus-app/quarkus-run.jar docker -f Dockerfile --name web --yes
-java -jar target/quarkus-app/quarkus-run.jar docker --dockerfile ./deploy/Dockerfile \
+./target/*-runner docker -f Dockerfile --name web --yes
+./target/*-runner docker --dockerfile ./deploy/Dockerfile \
   --dry-run --volume-host-root /srv/data
-java -jar target/quarkus-app/quarkus-run.jar docker -f Dockerfile --name api -- \
+./target/*-runner docker -f Dockerfile --name api -- \
   --memory 512m -p 8080:8080
 
 # Skip confirmation + allow unsupported flags to be dropped
-java -jar target/quarkus-app/quarkus-run.jar docker --yes --allow-partial -- \
+./target/*-runner docker --yes --allow-partial -- \
   run -it --rm -e FOO=1 -p 8080:80 --memory 256m nginx:latest
 
 # Preview only / skip bad port specs
-java -jar target/quarkus-app/quarkus-run.jar docker --dry-run --allow-partial --partial-ports -- \
+./target/*-runner docker --dry-run --allow-partial --partial-ports -- \
   run -p 80 -p 9000:90 /usr/bin/sleep 30
 ```
 
@@ -110,16 +147,16 @@ Useful flags: `--yes`/`-y`, `--dry-run`, `--print-only`, `--allow-partial`,
 
 ```bash
 # Terminal 1 — start daemon (Unix domain socket ~/.xion/xion.sock)
-java -jar target/quarkus-app/quarkus-run.jar daemon start
+./target/*-runner daemon start
 
 # Terminal 2 — create a bridge, run a process, list, logs, stop
-java -jar target/quarkus-app/quarkus-run.jar network create frontend
-java -jar target/quarkus-app/quarkus-run.jar run \
+./target/*-runner network create frontend
+./target/*-runner run \
   --name web --network frontend -p 8080:80 --memory 256m --cpus 1 \
   -- /usr/bin/sleep 60
-java -jar target/quarkus-app/quarkus-run.jar ps
-java -jar target/quarkus-app/quarkus-run.jar logs web
-java -jar target/quarkus-app/quarkus-run.jar stop web
+./target/*-runner ps
+./target/*-runner logs web
+./target/*-runner stop web
 ```
 
 On macOS, `run`/`start` generate Seatbelt profiles under `/tmp/xion-profiles/` and
