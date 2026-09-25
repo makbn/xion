@@ -188,6 +188,26 @@ class LifecycleIntegrationTest {
         assertThat(bridges.ipOf(app2)).isEmpty();
     }
 
+    @Test
+    void removeForceViaMediatorCleansNetworkIp() throws Exception {
+        String net = "rmnet-" + UUID.randomUUID().toString().substring(0, 8);
+        mediator.send(new CreateNetworkCommand(net, "10.89.55.0/24"));
+        int host = freePort();
+        String name = "rmapp-" + UUID.randomUUID().toString().substring(0, 6);
+        CreateContainerResult created = mediator.send(new CreateContainerCommand(
+                name, "sleep", List.of("5"), List.of(),
+                List.of(new io.xion.domain.PortMapping(host, 8087, "tcp")),
+                Optional.of(net), ResourceLimits.unlimited()));
+        mediator.send(new StartContainerCommand(created.id()));
+        assertThat(bridges.ipOf(name)).contains("10.89.55.2");
+
+        RemoveContainerResult removed = mediator.send(new RemoveContainerCommand(created.id(), true));
+        assertThat(removed.removed()).isTrue();
+        assertThat(bridges.ipOf(name)).isEmpty();
+        assertThat(bridges.endpointOf(name)).isEmpty();
+        assertThat(store.findById(created.id())).isEmpty();
+    }
+
     private static int freePort() throws Exception {
         try (java.net.ServerSocket probe = new java.net.ServerSocket(0)) {
             return probe.getLocalPort();
