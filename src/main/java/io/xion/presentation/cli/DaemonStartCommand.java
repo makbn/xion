@@ -17,8 +17,7 @@ import picocli.CommandLine;
                 "length-prefixed JSON IPC requests for create/start/stop/logs/ps/network."
         },
         footer = {
-                "  xion daemon start",
-                "  # or JVM: java -jar target/quarkus-app/quarkus-run.jar daemon start"
+                "  xion daemon start"
         })
 public class DaemonStartCommand implements Runnable {
 

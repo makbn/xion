@@ -1,5 +1,5 @@
 *
-!target/*-runner
-!target/*-runner.jar
+!target/xion
+!target/xion.jar
 !target/lib/*
 !target/quarkus-app/*
