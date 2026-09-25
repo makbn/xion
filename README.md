@@ -287,6 +287,10 @@ xion daemon uninstall
 Stale sockets are removed when the pidfile is dead so tunnels do not keep
 hitting a ghost UDS (502). Use `--foreground` only to debug.
 
+Framework logs (Quarkus / Xion INFO) go to **`~/.xion/logs/xion.log`**, not the
+terminal — so `xion ps` / `run` / … stay clean. Files rotate **weekly**
+(`.yyyy-Www` suffix, 12 backups). CLI command output is unchanged (stdout).
+
 Published `-p` traffic is still a **userspace** reverse proxy (bounded workers,
 large buffers, metrics on `xion inspect`). Kernel/host-network publish is not
 implemented yet — for peak HLS fan-out, treat current `-p` as “good bulk TCP,”

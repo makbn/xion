@@ -48,6 +48,7 @@ public class DaemonDoctorCommand implements Callable<Integer> {
         out.println("socket:      " + sock.toAbsolutePath());
         out.println("pidfile:     " + DaemonProcessSupport.pidFile(rt).toAbsolutePath());
         out.println("log:         " + DaemonProcessSupport.logFile(rt).toAbsolutePath());
+        out.println("quarkus-log: " + rt.resolve("logs").resolve("xion.log").toAbsolutePath());
 
         Optional<Long> pid = DaemonProcessSupport.readPid(rt);
         if (pid.isPresent()) {
