@@ -145,6 +145,26 @@ xion rm --force app1            # releases IP + host port mapping
 
 Managing `lo0` aliases typically requires elevated privileges for the daemon.
 
+### Published ports (`-p`) vs Docker
+
+`-p HOST:CONTAINER` is reverse-proxied in userspace (Java) from the host listen
+address to the container bind (`127.0.0.1` or the assigned bridge IP). That is
+**not** the same as Docker Desktop’s kernel/userland port publish:
+
+| | Xion `-p` today | Docker `-p` |
+| --- | --- | --- |
+| Path | Accept → per-connection copy workers (256KiB direct buffers, large SO_RCVBUF/SNDBUF) | OS / VM publish path |
+| Best for | APIs, remux, parallel streams on one host | Peak bulk TCP with minimal copies |
+| Limits | Still a userspace byte pump; not zero-copy | Closer to wire speed for huge fan-out |
+
+The proxy uses **one acceptor thread per published host port** and a **worker pool
+per connection** (not a single 8KB select loop). Connect + idle timeouts close
+wedged upstreams instead of hanging forever.
+
+For maximum throughput later, prefer an OS-level forward (e.g. `pf` / loopback
+divert) or a documented host-network-style publish. Until then, media apps should
+treat Xion `-p` as “good enough bulk TCP,” not bit-identical to Docker publish.
+
 ## Docker compatibility
 
 `xion docker` (aliases: `from-docker`, `compat`) maps a Docker CLI line or
@@ -186,6 +206,69 @@ xion logs -f web
 
 `xion docker` maps `-e` / `--env-file` / `-w` / `--rm` / `--restart` / `-f` / `--tail`
 onto these flags.
+
+## Seatbelt sandbox profiles
+
+Default Seatbelt policy is **`strict`**: deny-by-default with broad host reads,
+narrow writes (runtime / volumes / `/tmp`), and proxy-oriented loopback networking.
+That is too tight for many real Mac apps that need outbound HTTPS and host
+toolchains (Node, Homebrew ffmpeg / VideoToolbox, …).
+
+Use **`--sandbox-profile=relay`** for trusted local services that also need:
+
+- outbound internet
+- fork/exec of child tools (`ffmpeg`, `npx`, …)
+- fuller `process*` / `mach*` / `sysctl*` surface
+
+```bash
+xion run --name app --sandbox-profile=relay -p 8080:8080 \
+  -v "$PWD:$PWD" -v /opt/homebrew:/opt/homebrew:ro \
+  -- /bin/bash ./scripts/start.sh
+```
+
+Aliases: `network-relay`, `devtools` → `relay`. Writes stay limited to the
+runtime dir, RW volumes, workdir, `/tmp`, and any `--writable-path` entries.
+
+**`-v` alone does not imply the process can read the host toolchain** required
+to exec binaries from those mounts. Prefer `relay` for that class of app.
+
+### Docker-style absolute writable paths
+
+Some apps mkdir fixed absolute paths that were Docker named volumes
+(e.g. `/data/cache`). Under Xion those are real host paths. Either:
+
+```bash
+# bind the path yourself
+xion run -v "$PWD/cache:/data/cache" -- …
+
+# or let Xion create + Seatbelt-allow it
+xion run --writable-path /data/cache -- …
+```
+
+Daemon-wide extras (optional): `xion.sandbox.extra-writable-paths=/data/cache,/var/lib/myapp`
+(comma-separated; empty by default — nothing app-specific is baked in).
+
+### Troubleshooting
+
+| Symptom | Likely cause | What to do |
+| --- | --- | --- |
+| `sandbox-exec` exit **134** / immediate abort | Over-narrow `file-read*` (dyld / system reads denied hard) | Use `--sandbox-profile=relay`, or upgrade (defaults use broad reads) |
+| Profile rejected / invalid filter | Old `file-read-write`, dotted IPv4 in `(local ip "…")`, or invalid ops | Upgrade; start validates `.sb` with `sandbox-exec` before RUNNING |
+| `spawn EPERM` / child never starts | Seatbelt blocked `/dev/null` (Node `stdio: 'ignore'`) or missing `file-map-executable` | Upgrade — defaults allow `/dev/null`, `/dev/tty`, and `file-map-executable` |
+| `mkdir` EPERM under `/var/folders/…` | Daemon inherited host `TMPDIR`; Seatbelt cannot write there | Upgrade — spawn forces `TMPDIR=TMP=TEMP=/tmp` |
+| `EPERM mkdir '/some/abs/path'` | Absolute path outside `-v` / writable allows | `--writable-path /some/abs/path` or `-v HOST:/some/abs/path` |
+| Health OK but no outbound fetch | `strict` proxy-only network | Use `relay` (full `network-outbound`) |
+| Hung published port / CF **524**, `ps` still RUNNING | Wedged origin or proxy (often background EPERM loops) | Check `xion logs` for `EPERM`; restart; proxy has connect/idle timeouts |
+| `--memory` breaks later containers | Old builds called `setrlimit` on the daemon | Upgrade — limits are child-scoped only |
+| Start failed | Error includes `seatbelt=/path/….sb` | Inspect the generated profile; try `relay` if needed |
+
+Defaults that real macOS / Node apps need (shipped in both `strict` and `relay`):
+
+- write/read `(literal "/dev/null")` and `/dev/tty`
+- `(allow file-map-executable)` and `(allow system-socket)`
+- writable `/tmp` + `/private/tmp`
+- forced `TMPDIR=/tmp` on every Darwin spawn (curated env — not the full daemon environ)
+
 
 ## Example workflow
 
