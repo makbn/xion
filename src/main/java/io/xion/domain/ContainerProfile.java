@@ -24,6 +24,9 @@ public final class ContainerProfile {
     private final Optional<String> workdir;
     private final boolean autoRemove;
     private final RestartPolicy restartPolicy;
+    private final SandboxProfile sandboxProfile;
+    /** Absolute host paths allowed for write (Docker-style abs dirs); created on start when possible. */
+    private final List<String> writablePaths;
 
     public ContainerProfile(
             String id,
@@ -36,7 +39,7 @@ public final class ContainerProfile {
             ResourceLimits limits,
             String runtimeDir) {
         this(id, name, binary, args, volumes, ports, network, limits, runtimeDir,
-                Map.of(), Optional.empty(), false, RestartPolicy.NO);
+                Map.of(), Optional.empty(), false, RestartPolicy.NO, SandboxProfile.STRICT, List.of());
     }
 
     public ContainerProfile(
@@ -53,6 +56,45 @@ public final class ContainerProfile {
             Optional<String> workdir,
             boolean autoRemove,
             RestartPolicy restartPolicy) {
+        this(id, name, binary, args, volumes, ports, network, limits, runtimeDir,
+                env, workdir, autoRemove, restartPolicy, SandboxProfile.STRICT, List.of());
+    }
+
+    public ContainerProfile(
+            String id,
+            String name,
+            String binary,
+            List<String> args,
+            List<VolumeMount> volumes,
+            List<PortMapping> ports,
+            Optional<String> network,
+            ResourceLimits limits,
+            String runtimeDir,
+            Map<String, String> env,
+            Optional<String> workdir,
+            boolean autoRemove,
+            RestartPolicy restartPolicy,
+            SandboxProfile sandboxProfile) {
+        this(id, name, binary, args, volumes, ports, network, limits, runtimeDir,
+                env, workdir, autoRemove, restartPolicy, sandboxProfile, List.of());
+    }
+
+    public ContainerProfile(
+            String id,
+            String name,
+            String binary,
+            List<String> args,
+            List<VolumeMount> volumes,
+            List<PortMapping> ports,
+            Optional<String> network,
+            ResourceLimits limits,
+            String runtimeDir,
+            Map<String, String> env,
+            Optional<String> workdir,
+            boolean autoRemove,
+            RestartPolicy restartPolicy,
+            SandboxProfile sandboxProfile,
+            List<String> writablePaths) {
         this.id = Objects.requireNonNull(id, "id");
         this.name = Objects.requireNonNull(name, "name");
         this.binary = Objects.requireNonNull(binary, "binary");
@@ -66,6 +108,8 @@ public final class ContainerProfile {
         this.workdir = workdir == null ? Optional.empty() : workdir;
         this.autoRemove = autoRemove;
         this.restartPolicy = restartPolicy == null ? RestartPolicy.NO : restartPolicy;
+        this.sandboxProfile = sandboxProfile == null ? SandboxProfile.STRICT : sandboxProfile;
+        this.writablePaths = List.copyOf(writablePaths == null ? List.of() : writablePaths);
     }
 
     public String id() {
@@ -120,13 +164,21 @@ public final class ContainerProfile {
         return restartPolicy;
     }
 
+    public SandboxProfile sandboxProfile() {
+        return sandboxProfile;
+    }
+
+    public List<String> writablePaths() {
+        return writablePaths;
+    }
+
     public ContainerProfile withId(String newId) {
         return new ContainerProfile(newId, name, binary, args, volumes, ports, network, limits, runtimeDir,
-                env, workdir, autoRemove, restartPolicy);
+                env, workdir, autoRemove, restartPolicy, sandboxProfile, writablePaths);
     }
 
     public ContainerProfile withRuntimeDir(String dir) {
         return new ContainerProfile(id, name, binary, args, volumes, ports, network, limits, dir,
-                env, workdir, autoRemove, restartPolicy);
+                env, workdir, autoRemove, restartPolicy, sandboxProfile, writablePaths);
     }
 }

@@ -11,6 +11,7 @@ import java.util.Map;
 
 /**
  * Real macOS Seatbelt executor: {@code sandbox-exec -f <profile> <binary> …}.
+ * Injects a curated env with {@code TMPDIR=/tmp} so Darwin {@code os.tmpdir()} is writable.
  */
 @ApplicationScoped
 @Typed(DarwinSandboxExecutor.class)
@@ -20,6 +21,7 @@ public class DarwinSandboxExecutor implements SandboxExecutor {
     public SpawnedProcess spawn(Path profileFile, String binary, List<String> args, Path workDir,
                                 Path stdoutLog, Path stderrLog, Map<String, String> env) throws Exception {
         Files.createDirectories(workDir);
+        Files.createDirectories(Path.of("/tmp"));
         if (stdoutLog != null) {
             Files.createDirectories(stdoutLog.getParent());
         }
@@ -36,9 +38,9 @@ public class DarwinSandboxExecutor implements SandboxExecutor {
         }
         ProcessBuilder pb = new ProcessBuilder(command);
         pb.directory(workDir.toFile());
-        if (env != null && !env.isEmpty()) {
-            pb.environment().putAll(env);
-        }
+        Map<String, String> curated = SandboxEnv.curated(pb.environment(), env);
+        pb.environment().clear();
+        pb.environment().putAll(curated);
         if (stdoutLog != null) {
             pb.redirectOutput(stdoutLog.toFile());
         } else {

@@ -40,16 +40,16 @@ public class FakeSandboxExecutor implements SandboxExecutor {
         }
         ProcessBuilder pb = new ProcessBuilder(command);
         pb.directory(workDir.toFile());
-        Map<String, String> envCopy = env == null ? Map.of() : Map.copyOf(env);
+        Map<String, String> curated = SandboxEnv.curated(pb.environment(), env);
+        Map<String, String> envCopy = Map.copyOf(curated);
         synchronized (spawnedEnvs) {
             spawnedEnvs.add(envCopy);
         }
         synchronized (spawnedWorkDirs) {
             spawnedWorkDirs.add(workDir);
         }
-        if (!envCopy.isEmpty()) {
-            pb.environment().putAll(envCopy);
-        }
+        pb.environment().clear();
+        pb.environment().putAll(curated);
         if (stdoutLog != null) {
             pb.redirectOutput(stdoutLog.toFile());
         } else {
