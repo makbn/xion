@@ -43,24 +43,40 @@ want container-style lifecycle on a Mac and care about Apple Silicon hardware.
 
 ## Build
 
+JVM (tests / packaging):
+
 ```bash
 ./mvnw test
 ./mvnw package
 ```
 
-### Native image (macOS Apple Silicon)
+Native binary (macOS Apple Silicon) — output is explicitly named **`xion`**:
 
 ```bash
 export GRAALVM_HOME=/path/to/mandrel-25
 export PATH="$GRAALVM_HOME/bin:$PATH"
+
 ./mvnw package -Dnative
-./target/*-runner version
+# → target/xion
+```
+
+Install on your `PATH` (pick one):
+
+```bash
+cp target/xion /usr/local/bin/xion
+# or: ln -s "$(pwd)/target/xion" /usr/local/bin/xion
+# or: export PATH="$(pwd)/target:$PATH"
+```
+
+Verify:
+
+```bash
+xion version
+xion --help
 ```
 
 A Linux CI host cannot produce the macOS binary. Build native locally on Apple
 Silicon; use `./mvnw test` on Linux.
-
-Examples below assume `./target/*-runner` (or a `xion` symlink on your `PATH`).
 
 ## Commands
 
@@ -82,9 +98,9 @@ Examples below assume `./target/*-runner` (or a `xion` symlink on your `PATH`).
 | `help` | Help for any subcommand |
 
 ```bash
-./target/*-runner --help
-./target/*-runner run --help
-./target/*-runner network --help
+xion --help
+xion run --help
+xion network --help
 ```
 
 ### Stop and remove
@@ -95,10 +111,10 @@ allocated IP, and loopback alias.
 `rm` refuses to delete a **running** container (same idea as Docker). Use either:
 
 ```bash
-./target/*-runner stop web
-./target/*-runner rm web
+xion stop web
+xion rm web
 # or in one step:
-./target/*-runner rm --force web
+xion rm --force web
 ```
 
 Both paths clean process, port proxy, IP/alias, and SQLite state before the
@@ -115,16 +131,16 @@ Apps must bind `$XION_IP:$PORT` (not `0.0.0.0`) so two containers can share the
 same listen port:
 
 ```bash
-./target/*-runner network create frontend
-# optional: ./target/*-runner network create frontend --subnet 10.89.5.0/24
+xion network create frontend
+# optional: xion network create frontend --subnet 10.89.5.0/24
 
-./target/*-runner run --name app1 --network frontend -p 9000:8087 -- /path/to/app1
-./target/*-runner run --name app2 --network frontend -p 9001:8087 -- /path/to/app2
+xion run --name app1 --network frontend -p 9000:8087 -- /path/to/app1
+xion run --name app2 --network frontend -p 9001:8087 -- /path/to/app2
 # localhost:9000 → 10.89.0.2:8087
 # localhost:9001 → 10.89.0.3:8087
 
-./target/*-runner network inspect frontend   # subnet, gateway, member IPs
-./target/*-runner rm --force app1            # releases IP + host port mapping
+xion network inspect frontend   # subnet, gateway, member IPs
+xion rm --force app1            # releases IP + host port mapping
 ```
 
 Managing `lo0` aliases typically requires elevated privileges for the daemon.
@@ -136,28 +152,54 @@ Dockerfile to Xion, shows the result, then runs it (use `--yes` to skip the
 prompt; `--allow-partial` to drop unsupported flags).
 
 ```bash
-./target/*-runner docker --yes --allow-partial -- \
+xion docker --yes --allow-partial -- \
   run -d --name web -p 8080:80 --memory 256m nginx
 
-./target/*-runner docker -f Dockerfile --name web --publish-expose --yes
+xion docker -f Dockerfile --name web --publish-expose --yes
 ```
 
 Dockerfile mode maps `ENTRYPOINT`/`CMD` (and optionally `EXPOSE` / `VOLUME` /
-`WORKDIR`). Build layers (`FROM`/`RUN`/`COPY`/…) are not executed.
+`WORKDIR` / `ENV` → `-e`). Build layers (`FROM`/`RUN`/`COPY`/…) are not executed.
+
+## Docker parity (env, workdir, rm, restart, logs)
+
+Xion supports a subset of Docker run/logs flags natively:
+
+```bash
+# Environment (env-file first; -e overrides)
+xion run -e FOO=1 --env-file ./app.env -- /usr/bin/myapp
+
+# Working directory
+xion run -w /tmp -- /usr/bin/pwd
+
+# Auto-remove on exit
+xion run --rm -- /usr/bin/true
+
+# Restart policy (no|on-failure[:N]|always|unless-stopped)
+# v1: on restart the container is fully torn down (new IP may be assigned)
+xion run --restart on-failure:3 -- /usr/bin/flaky
+
+# Logs: last N lines and client-side follow
+xion logs --tail 100 web
+xion logs -f web
+```
+
+`xion docker` maps `-e` / `--env-file` / `-w` / `--rm` / `--restart` / `-f` / `--tail`
+onto these flags.
 
 ## Example workflow
 
 ```bash
 # Terminal 1
-./target/*-runner daemon start
+xion daemon start
 
 # Terminal 2
-./target/*-runner network create frontend
-./target/*-runner run \
+xion network create frontend
+xion run \
   --name web --network frontend -p 8080:80 --memory 256m --cpus 1 \
   -- /usr/bin/sleep 60
-./target/*-runner ps
-./target/*-runner logs web
-./target/*-runner stop web
-./target/*-runner rm web
+xion ps
+xion logs web
+xion stop web
+xion rm web
 ```
