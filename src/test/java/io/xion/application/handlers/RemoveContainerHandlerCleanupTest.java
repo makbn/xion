@@ -2,6 +2,7 @@ package io.xion.application.handlers;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.xion.application.ContainerTeardown;
 import io.xion.domain.ContainerRecord;
 import io.xion.domain.ContainerStatus;
 import io.xion.infrastructure.network.BridgeResolver;
@@ -45,7 +46,7 @@ class RemoveContainerHandlerCleanupTest {
     @Test
     void requestTypeIsRemoveCommand() {
         RemoveContainerHandler handler = new RemoveContainerHandler(
-                mock(ContainerStore.class), new ProcessRegistry(), new BridgeResolver());
+                mock(ContainerStore.class), teardown(new ProcessRegistry(), new BridgeResolver()));
         assertThat(handler.requestType()).isEqualTo(RemoveContainerCommand.class);
     }
 
@@ -56,7 +57,7 @@ class RemoveContainerHandlerCleanupTest {
         when(store.findByName("missing")).thenReturn(Optional.empty());
 
         RemoveContainerHandler remove = new RemoveContainerHandler(
-                store, new ProcessRegistry(), new BridgeResolver());
+                store, teardown(new ProcessRegistry(), new BridgeResolver()));
         assertThatThrownBy(() -> remove.handle(new RemoveContainerCommand("missing", false)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("not found");
@@ -73,7 +74,7 @@ class RemoveContainerHandlerCleanupTest {
         when(store.findByName("by-name")).thenReturn(Optional.of(stopped));
 
         RemoveContainerHandler remove = new RemoveContainerHandler(
-                store, new ProcessRegistry(), new BridgeResolver());
+                store, teardown(new ProcessRegistry(), new BridgeResolver()));
         RemoveContainerResult result = remove.handle(new RemoveContainerCommand("by-name", false));
         assertThat(result.id()).isEqualTo("id-1");
         assertThat(result.name()).isEqualTo("by-name");
@@ -91,7 +92,7 @@ class RemoveContainerHandlerCleanupTest {
         when(store.findById("x")).thenReturn(Optional.of(record));
 
         RemoveContainerHandler remove = new RemoveContainerHandler(
-                store, new ProcessRegistry(), new BridgeResolver());
+                store, teardown(new ProcessRegistry(), new BridgeResolver()));
         assertThatThrownBy(() -> remove.handle(new RemoveContainerCommand("x", false)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("RUNNING");
@@ -123,7 +124,7 @@ class RemoveContainerHandlerCleanupTest {
         assertThat(bridges.ipOf("web")).contains("10.89.9.2");
         assertThat(registry.getProxy("rm1")).isPresent();
 
-        RemoveContainerHandler remove = new RemoveContainerHandler(store, registry, bridges);
+        RemoveContainerHandler remove = new RemoveContainerHandler(store, teardown(registry, bridges));
         RemoveContainerResult result = remove.handle(new RemoveContainerCommand("rm1", true));
         assertThat(result.removed()).isTrue();
 
@@ -153,13 +154,13 @@ class RemoveContainerHandlerCleanupTest {
                 new FakeSandboxExecutor(), new FakeResourceGovernor(), bridges, registry, mapper);
         start.handle(new StartContainerCommand("rm2"));
 
-        new StopContainerHandler(store, registry, bridges).handle(new StopContainerCommand("rm2"));
+        new StopContainerHandler(store, teardown(registry, bridges)).handle(new StopContainerCommand("rm2"));
         assertThat(bridges.ipOf("api")).isEmpty();
 
         ContainerRecord stopped = created.withStatus(ContainerStatus.STOPPED).withPid(null);
         when(store.findById("rm2")).thenReturn(Optional.of(stopped));
 
-        RemoveContainerHandler remove = new RemoveContainerHandler(store, registry, bridges);
+        RemoveContainerHandler remove = new RemoveContainerHandler(store, teardown(registry, bridges));
         remove.handle(new RemoveContainerCommand("rm2", false));
         assertThat(bridges.ipOf("api")).isEmpty();
         assertThat(registry.getProxy("rm2")).isEmpty();
@@ -180,7 +181,8 @@ class RemoveContainerHandlerCleanupTest {
                 Optional.empty(), Optional.empty(), "{}");
         when(store.findById("idle-id")).thenReturn(Optional.of(created));
 
-        RemoveContainerHandler remove = new RemoveContainerHandler(store, new ProcessRegistry(), bridges);
+        RemoveContainerHandler remove = new RemoveContainerHandler(
+                store, teardown(new ProcessRegistry(), bridges));
         remove.handle(new RemoveContainerCommand("idle-id", false));
 
         assertThat(bridges.endpointOf("idle")).isEmpty();
@@ -203,7 +205,7 @@ class RemoveContainerHandlerCleanupTest {
                 Optional.empty(), Optional.empty(), "{}");
         when(store.findById("alive")).thenReturn(Optional.of(running));
 
-        new RemoveContainerHandler(store, registry, new BridgeResolver())
+        new RemoveContainerHandler(store, teardown(registry, new BridgeResolver()))
                 .handle(new RemoveContainerCommand("alive", true));
 
         verify(process).destroy();
@@ -229,7 +231,7 @@ class RemoveContainerHandlerCleanupTest {
 
         // Clear any stale interrupt flag from prior tests
         Thread.interrupted();
-        new RemoveContainerHandler(store, registry, new BridgeResolver())
+        new RemoveContainerHandler(store, teardown(registry, new BridgeResolver()))
                 .handle(new RemoveContainerCommand("intr", true));
 
         verify(process).destroy();
@@ -254,12 +256,33 @@ class RemoveContainerHandlerCleanupTest {
                 Optional.empty(), Optional.empty(), "{}");
         when(store.findById("px")).thenReturn(Optional.of(stopped));
 
-        new RemoveContainerHandler(store, registry, new BridgeResolver())
+        new RemoveContainerHandler(store, teardown(registry, new BridgeResolver()))
                 .handle(new RemoveContainerCommand("px", false));
 
         verify(proxy).stop();
         assertThat(registry.getProxy("px")).isEmpty();
         verify(store).delete("px");
+    }
+
+    @Test
+    void marksUserStoppedWhenLifecycleWatcherPresent() {
+        ContainerStore store = mock(ContainerStore.class);
+        ContainerLifecycleWatcher watcher = mock(ContainerLifecycleWatcher.class);
+        ContainerRecord stopped = new ContainerRecord(
+                "w1", "w1", "sleep", ContainerStatus.STOPPED, "/tmp",
+                Optional.empty(), Optional.empty(), Instant.now(),
+                Optional.empty(), Optional.empty(), "{}");
+        when(store.findById("w1")).thenReturn(Optional.of(stopped));
+
+        new RemoveContainerHandler(store, teardown(new ProcessRegistry(), new BridgeResolver()), watcher)
+                .handle(new RemoveContainerCommand("w1", false));
+
+        verify(watcher).markUserStopped("w1");
+        verify(store).delete("w1");
+    }
+
+    private static ContainerTeardown teardown(ProcessRegistry registry, BridgeResolver bridges) {
+        return new ContainerTeardown(registry, bridges);
     }
 
     private static ContainerRecord createdRecord(

@@ -55,12 +55,6 @@ public final class DockerfileTranslator {
             warnings.add("WORKDIR " + wd + " applied via /bin/sh -c 'cd … && exec …'");
         }
 
-        for (String env : parsed.envAssignments()) {
-            dropped.add("ENV " + env);
-        }
-        if (!parsed.envAssignments().isEmpty()) {
-            warnings.add("ENV directives are not applied by Xion (no -e support); export on the host if needed");
-        }
         for (var instr : parsed.ignoredBuild()) {
             if (List.of("FROM", "RUN", "COPY", "ADD", "MAINTAINER").contains(instr.keyword())) {
                 // build-only — mention once
@@ -95,6 +89,10 @@ public final class DockerfileTranslator {
             synthetic.add("--cpus");
             synthetic.add(Double.toString(options.cpus));
         }
+        for (String env : parsed.envAssignments()) {
+            synthetic.add("-e");
+            synthetic.add(env);
+        }
         if (options.publishExpose) {
             for (Integer port : parsed.exposePorts()) {
                 synthetic.add("-p");
@@ -127,7 +125,7 @@ public final class DockerfileTranslator {
         DockerCommandTranslator.Options cmdOpts = options.commandOptions == null
                 ? new DockerCommandTranslator.Options()
                 : options.commandOptions;
-        // Dockerfile translation is inherently partial (build layers, ENV, …)
+        // Dockerfile translation is inherently partial (build layers, USER, …)
         if (!dropped.isEmpty()) {
             cmdOpts.allowPartial = true;
             cmdOpts.dropUnsupported = true;

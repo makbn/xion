@@ -1,5 +1,6 @@
 package io.xion.application.handlers;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.xion.application.mediator.RequestHandler;
@@ -8,6 +9,7 @@ import io.xion.domain.ContainerRecord;
 import io.xion.domain.ContainerStatus;
 import io.xion.domain.PortMapping;
 import io.xion.domain.ResourceLimits;
+import io.xion.domain.RestartPolicy;
 import io.xion.domain.VolumeMount;
 import io.xion.infrastructure.network.BridgeResolver;
 import io.xion.infrastructure.network.PortProxy;
@@ -18,6 +20,7 @@ import io.xion.infrastructure.seatbelt.SandboxExecutor;
 import io.xion.infrastructure.seatbelt.SeatbeltProfileGenerator;
 import io.xion.infrastructure.store.ContainerStore;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 
 import java.nio.file.Files;
@@ -25,6 +28,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -40,8 +44,31 @@ public class StartContainerHandler implements RequestHandler<StartContainerComma
     private final BridgeResolver bridges;
     private final ProcessRegistry processRegistry;
     private final ObjectMapper mapper;
+    private final Instance<ContainerLifecycleWatcher> lifecycleWatcher;
 
     @Inject
+    public StartContainerHandler(
+            ContainerStore store,
+            RuntimePaths paths,
+            SeatbeltProfileGenerator profileGenerator,
+            SandboxExecutor sandboxExecutor,
+            ResourceGovernor resourceGovernor,
+            BridgeResolver bridges,
+            ProcessRegistry processRegistry,
+            ObjectMapper mapper,
+            Instance<ContainerLifecycleWatcher> lifecycleWatcher) {
+        this.store = store;
+        this.paths = paths;
+        this.profileGenerator = profileGenerator;
+        this.sandboxExecutor = sandboxExecutor;
+        this.resourceGovernor = resourceGovernor;
+        this.bridges = bridges;
+        this.processRegistry = processRegistry;
+        this.mapper = mapper;
+        this.lifecycleWatcher = lifecycleWatcher;
+    }
+
+    /** Unit-test constructor (no lifecycle watcher). */
     public StartContainerHandler(
             ContainerStore store,
             RuntimePaths paths,
@@ -59,6 +86,7 @@ public class StartContainerHandler implements RequestHandler<StartContainerComma
         this.bridges = bridges;
         this.processRegistry = processRegistry;
         this.mapper = mapper;
+        this.lifecycleWatcher = null;
     }
 
     @Override
@@ -98,7 +126,8 @@ public class StartContainerHandler implements RequestHandler<StartContainerComma
             String binary = wrapped.getFirst();
             List<String> args = wrapped.size() > 1 ? wrapped.subList(1, wrapped.size()) : List.of();
 
-            Map<String, String> env = new HashMap<>();
+            // Profile env first; XION_* / PORT win on conflict.
+            Map<String, String> env = new HashMap<>(profile.env());
             if (allocatedIp != null) {
                 env.put("XION_IP", allocatedIp);
                 profile.network().ifPresent(n -> env.put("XION_NETWORK", n));
@@ -107,16 +136,23 @@ public class StartContainerHandler implements RequestHandler<StartContainerComma
                 env.put("PORT", Integer.toString(firstContainerPort));
             }
 
+            Path workDir = profile.workdir()
+                    .map(Path::of)
+                    .orElse(paths.containerDir(record.id()));
+
             SandboxExecutor.SpawnedProcess spawned = sandboxExecutor.spawn(
                     sb,
                     binary,
                     args,
-                    paths.containerDir(record.id()),
+                    workDir,
                     paths.stdoutLog(record.id()),
                     paths.stderrLog(record.id()),
                     env);
 
             processRegistry.register(record.id(), spawned.process());
+            if (lifecycleWatcher != null && !lifecycleWatcher.isUnsatisfied()) {
+                lifecycleWatcher.get().onStart(record.id(), spawned.process());
+            }
 
             if (!profile.ports().isEmpty()) {
                 PortProxy proxy = new PortProxy();
@@ -124,7 +160,6 @@ public class StartContainerHandler implements RequestHandler<StartContainerComma
                 processRegistry.registerProxy(record.id(), proxy);
             }
 
-            // Persist allocated IP into profile for inspect
             ContainerRecord updated = record
                     .withStatus(ContainerStatus.RUNNING)
                     .withPid(spawned.pid())
@@ -200,6 +235,30 @@ public class StartContainerHandler implements RequestHandler<StartContainerComma
                         Optional.ofNullable(cpus));
             }
             String binary = node.has("binary") ? node.get("binary").asText() : record.binary();
+
+            Map<String, String> env = new LinkedHashMap<>();
+            if (node.has("env") && node.get("env").isObject()) {
+                node.get("env").fields().forEachRemaining(e -> env.put(e.getKey(), e.getValue().asText("")));
+            } else if (node.has("env") && node.get("env").isArray()) {
+                for (JsonNode e : node.get("env")) {
+                    String spec = e.asText();
+                    int eq = spec.indexOf('=');
+                    if (eq > 0) {
+                        env.put(spec.substring(0, eq), spec.substring(eq + 1));
+                    } else if (!spec.isBlank()) {
+                        env.put(spec, "");
+                    }
+                }
+            }
+            Optional<String> workdir = node.has("workdir") && !node.get("workdir").isNull()
+                    ? Optional.of(node.get("workdir").asText())
+                    : Optional.empty();
+            boolean autoRemove = node.path("autoRemove").asBoolean(false);
+            RestartPolicy restartPolicy = RestartPolicy.NO;
+            if (node.hasNonNull("restartPolicy")) {
+                restartPolicy = RestartPolicy.parse(node.get("restartPolicy").asText());
+            }
+
             return new ContainerProfile(
                     record.id(),
                     record.name(),
@@ -209,7 +268,11 @@ public class StartContainerHandler implements RequestHandler<StartContainerComma
                     ports,
                     network,
                     limits,
-                    record.runtimeDir());
+                    record.runtimeDir(),
+                    env,
+                    workdir,
+                    autoRemove,
+                    restartPolicy);
         } catch (Exception e) {
             return new ContainerProfile(
                     record.id(),

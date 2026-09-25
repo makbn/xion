@@ -31,12 +31,16 @@ import io.xion.application.handlers.UpdateContainerResult;
 import io.xion.domain.ContainerRecord;
 import io.xion.domain.PortMapping;
 import io.xion.domain.ResourceLimits;
+import io.xion.domain.RestartPolicy;
 import io.xion.domain.VolumeMount;
 import io.xion.infrastructure.ipc.IpcEnvelope;
+import io.xion.infrastructure.process.EnvFileParser;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -63,7 +67,11 @@ public class IpcDispatcher {
                 case "create" -> mediator.send(toCreate(payload));
                 case "start" -> mediator.send(new StartContainerCommand(text(payload, "id")));
                 case "stop" -> mediator.send(new StopContainerCommand(text(payload, "id")));
-                case "logs" -> mediator.send(new LogsQuery(text(payload, "id"), payload.path("stderr").asBoolean(false)));
+                case "logs" -> mediator.send(new LogsQuery(
+                        text(payload, "id"),
+                        payload.path("stderr").asBoolean(false),
+                        payload.path("tail").asInt(0),
+                        payload.path("follow").asBoolean(false)));
                 case "ps", "list" -> mediator.send(new ListContainersQuery(payload.path("all").asBoolean(false)));
                 case "inspect" -> mediator.send(new InspectContainerQuery(text(payload, "id")));
                 case "rm", "remove" -> mediator.send(new RemoveContainerCommand(
@@ -131,6 +139,30 @@ public class IpcDispatcher {
         String memory = payload.path("memory").asText(null);
         Double cpus = payload.hasNonNull("cpus") ? payload.get("cpus").asDouble() : null;
         ResourceLimits limits = ResourceLimits.of(memory, cpus);
+
+        Map<String, String> fromFiles = new LinkedHashMap<>();
+        payload.path("envFiles").forEach(n -> fromFiles.putAll(EnvFileParser.parse(Path.of(n.asText()))));
+        Map<String, String> fromEnv = new LinkedHashMap<>();
+        JsonNode envNode = payload.get("env");
+        if (envNode != null && envNode.isObject()) {
+            envNode.fields().forEachRemaining(e -> fromEnv.put(e.getKey(), e.getValue().asText("")));
+        } else if (envNode != null && envNode.isArray()) {
+            envNode.forEach(n -> fromEnv.putAll(EnvFileParser.parseAssignment(n.asText())));
+        }
+        Map<String, String> env = EnvFileParser.merge(fromFiles, fromEnv);
+
+        Optional<String> workdir = payload.hasNonNull("workdir")
+                ? Optional.of(payload.get("workdir").asText())
+                : Optional.empty();
+        boolean autoRemove = payload.path("autoRemove").asBoolean(false)
+                || payload.path("rm").asBoolean(false);
+        RestartPolicy restartPolicy = RestartPolicy.NO;
+        if (payload.hasNonNull("restartPolicy")) {
+            restartPolicy = RestartPolicy.parse(payload.get("restartPolicy").asText());
+        } else if (payload.hasNonNull("restart")) {
+            restartPolicy = RestartPolicy.parse(payload.get("restart").asText());
+        }
+
         return new CreateContainerCommand(
                 payload.path("name").asText(null),
                 text(payload, "binary"),
@@ -138,7 +170,11 @@ public class IpcDispatcher {
                 volumes,
                 ports,
                 network,
-                limits);
+                limits,
+                env,
+                workdir,
+                autoRemove,
+                restartPolicy);
     }
 
     private JsonNode toJson(Object result) {

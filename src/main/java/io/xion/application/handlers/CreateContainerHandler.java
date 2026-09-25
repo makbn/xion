@@ -8,6 +8,7 @@ import io.xion.domain.ContainerRecord;
 import io.xion.domain.ContainerStatus;
 import io.xion.domain.PortMapping;
 import io.xion.domain.ResourceLimits;
+import io.xion.domain.RestartPolicy;
 import io.xion.domain.VolumeMount;
 import io.xion.infrastructure.network.BridgeResolver;
 import io.xion.infrastructure.process.RuntimePaths;
@@ -17,6 +18,7 @@ import jakarta.inject.Inject;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -60,6 +62,10 @@ public class CreateContainerHandler implements RequestHandler<CreateContainerCom
         List<PortMapping> ports = request.ports() == null ? List.of() : request.ports();
         List<String> args = request.args() == null ? List.of() : request.args();
         Optional<String> network = request.network() == null ? Optional.empty() : request.network();
+        Map<String, String> env = request.env() == null ? Map.of() : request.env();
+        Optional<String> workdir = request.workdir() == null ? Optional.empty() : request.workdir();
+        boolean autoRemove = request.autoRemove();
+        RestartPolicy restart = request.restartPolicy() == null ? RestartPolicy.NO : request.restartPolicy();
 
         ObjectNode json = mapper.createObjectNode();
         json.put("id", id);
@@ -98,6 +104,15 @@ public class CreateContainerHandler implements RequestHandler<CreateContainerCom
         } else {
             limitsNode.putNull("cpus");
         }
+        ObjectNode envNode = json.putObject("env");
+        env.forEach(envNode::put);
+        if (workdir.isPresent()) {
+            json.put("workdir", workdir.get());
+        } else {
+            json.putNull("workdir");
+        }
+        json.put("autoRemove", autoRemove);
+        json.put("restartPolicy", restart.wire());
 
         network.ifPresent(bridges::createNetwork);
         ContainerRecord record = new ContainerRecord(

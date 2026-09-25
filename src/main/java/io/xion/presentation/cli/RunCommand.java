@@ -86,6 +86,35 @@ public class RunCommand implements Callable<Integer> {
             description = "CPU budget hint (e.g. 1.5). On macOS wraps spawn with taskpolicy and CPU rlimit.")
     Double cpus;
 
+    @CommandLine.Option(
+            names = {"-e", "--env"},
+            paramLabel = "KEY=VALUE",
+            description = "Set environment variable (repeatable). Overrides values from --env-file.")
+    List<String> env = new ArrayList<>();
+
+    @CommandLine.Option(
+            names = {"--env-file"},
+            paramLabel = "FILE",
+            description = "Read env vars from a Docker-style env file (repeatable).")
+    List<String> envFiles = new ArrayList<>();
+
+    @CommandLine.Option(
+            names = {"-w", "--workdir"},
+            paramLabel = "DIR",
+            description = "Working directory for the process (ProcessBuilder directory).")
+    String workdir;
+
+    @CommandLine.Option(
+            names = {"--rm"},
+            description = "Automatically remove the container when it exits.")
+    boolean rm;
+
+    @CommandLine.Option(
+            names = {"--restart"},
+            paramLabel = "POLICY",
+            description = "Restart policy: no|on-failure[:N]|always|unless-stopped.")
+    String restart;
+
     @CommandLine.Parameters(
             index = "0",
             paramLabel = "BINARY",
@@ -123,6 +152,23 @@ public class RunCommand implements Callable<Integer> {
         }
         if (cpus != null) {
             create.put("cpus", cpus);
+        }
+        if (!env.isEmpty()) {
+            ArrayNode envNode = create.putArray("env");
+            env.forEach(envNode::add);
+        }
+        if (!envFiles.isEmpty()) {
+            ArrayNode filesNode = create.putArray("envFiles");
+            envFiles.forEach(filesNode::add);
+        }
+        if (workdir != null) {
+            create.put("workdir", workdir);
+        }
+        if (rm) {
+            create.put("autoRemove", true);
+        }
+        if (restart != null) {
+            create.put("restartPolicy", restart);
         }
         var created = client.send("create", create);
         if (!created.ok()) {

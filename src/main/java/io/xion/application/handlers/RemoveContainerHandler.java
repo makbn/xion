@@ -1,28 +1,33 @@
 package io.xion.application.handlers;
 
+import io.xion.application.ContainerTeardown;
 import io.xion.application.mediator.RequestHandler;
 import io.xion.domain.ContainerRecord;
 import io.xion.domain.ContainerStatus;
-import io.xion.infrastructure.network.BridgeResolver;
-import io.xion.infrastructure.process.ProcessRegistry;
 import io.xion.infrastructure.store.ContainerStore;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-
-import java.util.concurrent.TimeUnit;
 
 @ApplicationScoped
 public class RemoveContainerHandler implements RequestHandler<RemoveContainerCommand, RemoveContainerResult> {
 
     private final ContainerStore store;
-    private final ProcessRegistry processRegistry;
-    private final BridgeResolver bridges;
+    private final ContainerTeardown teardown;
+    private final ContainerLifecycleWatcher lifecycleWatcher;
 
     @Inject
-    public RemoveContainerHandler(ContainerStore store, ProcessRegistry processRegistry, BridgeResolver bridges) {
+    public RemoveContainerHandler(
+            ContainerStore store,
+            ContainerTeardown teardown,
+            ContainerLifecycleWatcher lifecycleWatcher) {
         this.store = store;
-        this.processRegistry = processRegistry;
-        this.bridges = bridges;
+        this.teardown = teardown;
+        this.lifecycleWatcher = lifecycleWatcher;
+    }
+
+    /** Unit-test constructor without a lifecycle watcher. */
+    public RemoveContainerHandler(ContainerStore store, ContainerTeardown teardown) {
+        this(store, teardown, null);
     }
 
     @Override
@@ -41,34 +46,11 @@ public class RemoveContainerHandler implements RequestHandler<RemoveContainerCom
                     "Container is RUNNING; stop it first or pass --force to stop+remove");
         }
 
-        // Always tear down live resources (process, reverse-proxy ports, IP/alias) before delete.
-        // Covers: rm --force on RUNNING, and defensive cleanup if status/registry are out of sync.
-        shutdownRuntime(record.id());
-        bridges.detach(record.name());
+        if (lifecycleWatcher != null) {
+            lifecycleWatcher.markUserStopped(record.id());
+        }
+        teardown.shutdown(record.id(), record.name(), true);
         store.delete(record.id());
         return new RemoveContainerResult(record.id(), record.name(), true);
-    }
-
-    private void shutdownRuntime(String containerId) {
-        processRegistry.get(containerId).ifPresent(process -> {
-            process.destroy();
-            try {
-                process.waitFor(5, TimeUnit.SECONDS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                process.destroyForcibly();
-            }
-            if (process.isAlive()) {
-                process.destroyForcibly();
-            }
-        });
-        processRegistry.remove(containerId);
-        processRegistry.removeProxy(containerId).ifPresent(proxy -> {
-            try {
-                proxy.stop();
-            } catch (Exception ignored) {
-                // best-effort
-            }
-        });
     }
 }

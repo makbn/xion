@@ -2,6 +2,7 @@ package io.xion.application.handlers;
 
 import io.xion.application.mediator.RequestHandler;
 import io.xion.domain.ContainerRecord;
+import io.xion.infrastructure.process.LogReader;
 import io.xion.infrastructure.process.RuntimePaths;
 import io.xion.infrastructure.store.ContainerStore;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -36,7 +37,9 @@ public class LogsHandler implements RequestHandler<LogsQuery, LogsResult> {
             if (!Files.exists(logPath)) {
                 return new LogsResult(record.id(), "");
             }
-            return new LogsResult(record.id(), Files.readString(logPath));
+            // IPC path: snapshot with optional tail. Follow is handled client-side by LogsCommand.
+            String content = LogReader.tail(logPath, request.tail());
+            return new LogsResult(record.id(), content);
         } catch (Exception e) {
             throw new IllegalStateException("Failed to read logs: " + e.getMessage(), e);
         }

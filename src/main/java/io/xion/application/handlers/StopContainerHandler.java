@@ -1,29 +1,35 @@
 package io.xion.application.handlers;
 
+import io.xion.application.ContainerTeardown;
 import io.xion.application.mediator.RequestHandler;
 import io.xion.domain.ContainerRecord;
 import io.xion.domain.ContainerStatus;
-import io.xion.infrastructure.network.BridgeResolver;
-import io.xion.infrastructure.process.ProcessRegistry;
 import io.xion.infrastructure.store.ContainerStore;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
 import java.time.Instant;
-import java.util.concurrent.TimeUnit;
 
 @ApplicationScoped
 public class StopContainerHandler implements RequestHandler<StopContainerCommand, StopContainerResult> {
 
     private final ContainerStore store;
-    private final ProcessRegistry processRegistry;
-    private final BridgeResolver bridges;
+    private final ContainerTeardown teardown;
+    private final ContainerLifecycleWatcher lifecycleWatcher;
 
     @Inject
-    public StopContainerHandler(ContainerStore store, ProcessRegistry processRegistry, BridgeResolver bridges) {
+    public StopContainerHandler(
+            ContainerStore store,
+            ContainerTeardown teardown,
+            ContainerLifecycleWatcher lifecycleWatcher) {
         this.store = store;
-        this.processRegistry = processRegistry;
-        this.bridges = bridges;
+        this.teardown = teardown;
+        this.lifecycleWatcher = lifecycleWatcher;
+    }
+
+    /** Unit-test constructor without a lifecycle watcher. */
+    public StopContainerHandler(ContainerStore store, ContainerTeardown teardown) {
+        this(store, teardown, null);
     }
 
     @Override
@@ -37,27 +43,10 @@ public class StopContainerHandler implements RequestHandler<StopContainerCommand
                 .or(() -> store.findByName(request.idOrName()))
                 .orElseThrow(() -> new IllegalArgumentException("Container not found: " + request.idOrName()));
 
-        processRegistry.get(record.id()).ifPresent(process -> {
-            process.destroy();
-            try {
-                process.waitFor(5, TimeUnit.SECONDS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                process.destroyForcibly();
-            }
-            if (process.isAlive()) {
-                process.destroyForcibly();
-            }
-        });
-        processRegistry.remove(record.id());
-        processRegistry.removeProxy(record.id()).ifPresent(proxy -> {
-            try {
-                proxy.stop();
-            } catch (Exception ignored) {
-                // best-effort
-            }
-        });
-        bridges.detach(record.name());
+        if (lifecycleWatcher != null) {
+            lifecycleWatcher.markUserStopped(record.id());
+        }
+        teardown.shutdown(record.id(), record.name(), true);
 
         ContainerRecord updated = record
                 .withStatus(ContainerStatus.STOPPED)

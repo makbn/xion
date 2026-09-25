@@ -42,6 +42,11 @@ public class SeatbeltProfileGenerator {
         lines.add(allowSubpath("file-read*", profile.runtimeDir()));
         lines.add(allowSubpath("file-write*", profile.runtimeDir()));
         lines.add(allowSubpath("file-read-write", profile.runtimeDir()));
+        if (profile.workdir().isPresent()) {
+            String wd = profile.workdir().get();
+            lines.add("; workdir");
+            lines.add(allowSubpath("file-read-write", wd));
+        }
         for (VolumeMount volume : profile.volumes()) {
             String op = volume.readOnly() ? "file-read*" : "file-read-write";
             lines.add("; volume " + volume.hostPath() + " -> " + volume.containerPath());

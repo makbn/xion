@@ -13,13 +13,12 @@ class DockerCommandTranslatorTest {
 
     @Test
     void translatesDockerRunCoreFlags() {
-        var opts = new DockerCommandTranslator.Options();
-        opts.allowPartial = true;
+        // -e is supported — no allowPartial required solely for env
         var t = translator.translate(List.of(
                 "docker", "run", "-d", "--name", "web",
                 "-p", "8080:80", "-v", "/data:/data:ro",
                 "--network", "frontend", "--memory", "256m", "--cpus", "1.5",
-                "-e", "FOO=1", "nginx:1.25", "-g", "daemon"), opts);
+                "-e", "FOO=1", "nginx:1.25", "-g", "daemon"));
         assertThat(t.xionArgs()).containsExactly(
                 "run",
                 "--name", "web",
@@ -28,17 +27,28 @@ class DockerCommandTranslatorTest {
                 "--network", "frontend",
                 "--memory", "256m",
                 "--cpus", "1.5",
+                "-e", "FOO=1",
                 "--",
                 "nginx",
                 "-g", "daemon");
-        assertThat(t.dropped()).anyMatch(d -> d.contains("-e"));
-        assertThat(t.warnings()).isNotEmpty();
+        assertThat(t.dropped()).noneMatch(d -> d.contains("-e"));
+        assertThat(t.warnings()).isNotEmpty(); // -d detach + image tag strip
         assertThat(t.partial()).isTrue();
     }
 
     @Test
+    void translatesWorkdirRmRestartEnvFile() {
+        var t = translator.translate(List.of(
+                "run", "-w", "/app", "--rm", "--restart", "on-failure:3",
+                "--env-file", "/tmp/env", "/usr/bin/sleep", "1"));
+        assertThat(t.xionArgs()).contains("-w", "/app", "--rm", "--restart", "on-failure:3",
+                "--env-file", "/tmp/env", "--", "/usr/bin/sleep", "1");
+        assertThat(t.dropped()).isEmpty();
+    }
+
+    @Test
     void refusesUnsupportedWithoutAllowPartial() {
-        assertThatThrownBy(() -> translator.translate(List.of("run", "-e", "A=1", "nginx")))
+        assertThatThrownBy(() -> translator.translate(List.of("run", "-u", "nobody", "nginx")))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("--allow-partial");
     }
@@ -60,8 +70,8 @@ class DockerCommandTranslatorTest {
         assertThat(translator.translate(List.of("ps"), allow()).xionArgs()).containsExactly("ps");
         assertThat(translator.translate(List.of("ps", "-a"), allow()).xionArgs()).containsExactly("ps", "-a");
         assertThat(translator.translate(List.of("stop", "web")).xionArgs()).containsExactly("stop", "web");
-        assertThat(translator.translate(List.of("logs", "-f", "web"), allow()).xionArgs())
-                .containsExactly("logs", "web");
+        assertThat(translator.translate(List.of("logs", "-f", "--tail", "20", "web")).xionArgs())
+                .containsExactly("logs", "-f", "--tail", "20", "web");
         assertThat(translator.translate(List.of("network", "create", "frontend")).xionArgs())
                 .containsExactly("network", "create", "frontend");
         assertThat(translator.translate(List.of("network", "ls")).xionArgs())

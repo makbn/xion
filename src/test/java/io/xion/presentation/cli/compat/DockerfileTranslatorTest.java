@@ -73,7 +73,8 @@ class DockerfileTranslatorTest {
         assertThat(t.xionArgs()).contains("/bin/sh");
         assertThat(String.join(" ", t.xionArgs())).contains("cd /opt/app");
         assertThat(String.join(" ", t.xionArgs())).contains("/usr/bin/java");
-        assertThat(t.dropped()).anyMatch(d -> d.startsWith("ENV "));
+        assertThat(t.xionArgs()).contains("-e", "APP_ENV=prod");
+        assertThat(t.dropped()).noneMatch(d -> d.startsWith("ENV "));
         assertThat(t.dropped()).anyMatch(d -> d.startsWith("USER"));
         assertThat(t.warnings()).anyMatch(w -> w.contains("build-only"));
         assertThat(t.summary()).contains("Dockerfile");

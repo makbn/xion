@@ -21,6 +21,7 @@ public class FakeSandboxExecutor implements SandboxExecutor {
     private final AtomicLong nextPid = new AtomicLong(10_000);
     private final List<SpawnedProcess> spawned = new ArrayList<>();
     private final List<Map<String, String>> spawnedEnvs = new ArrayList<>();
+    private final List<Path> spawnedWorkDirs = new ArrayList<>();
 
     @Override
     public SpawnedProcess spawn(Path profileFile, String binary, List<String> args, Path workDir,
@@ -42,6 +43,9 @@ public class FakeSandboxExecutor implements SandboxExecutor {
         Map<String, String> envCopy = env == null ? Map.of() : Map.copyOf(env);
         synchronized (spawnedEnvs) {
             spawnedEnvs.add(envCopy);
+        }
+        synchronized (spawnedWorkDirs) {
+            spawnedWorkDirs.add(workDir);
         }
         if (!envCopy.isEmpty()) {
             pb.environment().putAll(envCopy);
@@ -86,12 +90,27 @@ public class FakeSandboxExecutor implements SandboxExecutor {
         }
     }
 
+    public List<Path> spawnedWorkDirs() {
+        synchronized (spawnedWorkDirs) {
+            return List.copyOf(spawnedWorkDirs);
+        }
+    }
+
+    public Path lastWorkDir() {
+        synchronized (spawnedWorkDirs) {
+            return spawnedWorkDirs.isEmpty() ? null : spawnedWorkDirs.getLast();
+        }
+    }
+
     public void clear() {
         synchronized (spawned) {
             spawned.clear();
         }
         synchronized (spawnedEnvs) {
             spawnedEnvs.clear();
+        }
+        synchronized (spawnedWorkDirs) {
+            spawnedWorkDirs.clear();
         }
     }
 }

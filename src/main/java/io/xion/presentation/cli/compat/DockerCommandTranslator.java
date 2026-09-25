@@ -157,14 +157,22 @@ public final class DockerCommandTranslator {
     private Translation translateLogs(List<String> rest, Options options) {
         List<String> dropped = new ArrayList<>();
         boolean stderr = false;
+        boolean follow = false;
+        String tail = null;
         String target = null;
         for (int i = 0; i < rest.size(); i++) {
             String a = rest.get(i);
             if ("--stderr".equals(a)) {
                 stderr = true;
-            } else if ("-f".equals(a) || "--follow".equals(a) || "--tail".equals(a) || "-t".equals(a)
-                    || "--timestamps".equals(a) || "--since".equals(a) || "--until".equals(a)) {
-                if (("--tail".equals(a) || "--since".equals(a) || "--until".equals(a))
+            } else if ("-f".equals(a) || "--follow".equals(a)) {
+                follow = true;
+            } else if ("--tail".equals(a)) {
+                tail = requireValue("logs", a, rest, ++i);
+            } else if (a.startsWith("--tail=")) {
+                tail = a.substring("--tail=".length());
+            } else if ("-t".equals(a) || "--timestamps".equals(a)
+                    || "--since".equals(a) || "--until".equals(a)) {
+                if (("--since".equals(a) || "--until".equals(a))
                         && i + 1 < rest.size() && !rest.get(i + 1).startsWith("-")) {
                     dropped.add(a + " " + rest.get(++i));
                 } else {
@@ -187,10 +195,17 @@ public final class DockerCommandTranslator {
         if (stderr) {
             xion.add("--stderr");
         }
+        if (follow) {
+            xion.add("-f");
+        }
+        if (tail != null) {
+            xion.add("--tail");
+            xion.add(tail);
+        }
         xion.add(target);
         List<String> warnings = new ArrayList<>();
         if (!dropped.isEmpty()) {
-            warnings.add("Follow/tail/timestamps are not supported by xion logs yet");
+            warnings.add("Some docker logs flags are not supported by xion logs");
         }
         return new Translation(xion, dropped, warnings, !dropped.isEmpty(),
                 "docker logs → xion " + String.join(" ", xion));
@@ -287,8 +302,13 @@ public final class DockerCommandTranslator {
         String memory = null;
         Double cpus = null;
         String network = null;
+        String workdir = null;
+        String restart = null;
+        boolean autoRemove = false;
         List<String> ports = new ArrayList<>();
         List<String> volumes = new ArrayList<>();
+        List<String> envs = new ArrayList<>();
+        List<String> envFiles = new ArrayList<>();
         boolean detachSeen = false;
 
         int i = 0;
@@ -354,10 +374,30 @@ public final class DockerCommandTranslator {
                     cpus = Double.parseDouble(requireValue("run", a, rest, ++i));
                     i++;
                 }
-                case "-e", "--env", "--env-file", "-w", "--workdir", "-u", "--user",
-                     "--entrypoint", "--restart", "--health-cmd", "--label", "-l",
+                case "-e", "--env" -> {
+                    envs.add(requireValue("run", a, rest, ++i));
+                    i++;
+                }
+                case "--env-file" -> {
+                    envFiles.add(requireValue("run", a, rest, ++i));
+                    i++;
+                }
+                case "-w", "--workdir" -> {
+                    workdir = requireValue("run", a, rest, ++i);
+                    i++;
+                }
+                case "--rm" -> {
+                    autoRemove = true;
+                    i++;
+                }
+                case "--restart" -> {
+                    restart = requireValue("run", a, rest, ++i);
+                    i++;
+                }
+                case "-u", "--user",
+                     "--entrypoint", "--health-cmd", "--label", "-l",
                      "--add-host", "--device", "--gpus", "--runtime", "--platform",
-                     "--pull", "--cidfile", "--hostname", "-h", "--rm", "--init",
+                     "--pull", "--cidfile", "--hostname", "-h", "--init",
                      "--privileged", "--read-only", "--security-opt", "--tmpfs",
                      "--ulimit", "--sysctl", "--ipc", "--pid", "--uts", "--cgroupns",
                      "--expose", "--link", "--dns", "--dns-search", "--dns-option",
@@ -390,6 +430,18 @@ public final class DockerCommandTranslator {
                         i++;
                     } else if (a.startsWith("--cpus=")) {
                         cpus = Double.parseDouble(a.substring("--cpus=".length()));
+                        i++;
+                    } else if (a.startsWith("-e=") || a.startsWith("--env=")) {
+                        envs.add(a.substring(a.indexOf('=') + 1));
+                        i++;
+                    } else if (a.startsWith("--env-file=")) {
+                        envFiles.add(a.substring("--env-file=".length()));
+                        i++;
+                    } else if (a.startsWith("-w=") || a.startsWith("--workdir=")) {
+                        workdir = a.substring(a.indexOf('=') + 1);
+                        i++;
+                    } else if (a.startsWith("--restart=")) {
+                        restart = a.substring("--restart=".length());
                         i++;
                     } else if (a.startsWith("--")) {
                         if (i + 1 < rest.size() && !rest.get(i + 1).startsWith("-") && looksLikeValueFlag(a)) {
@@ -460,6 +512,25 @@ public final class DockerCommandTranslator {
         if (cpus != null) {
             xion.add("--cpus");
             xion.add(Double.toString(cpus));
+        }
+        for (String e : envs) {
+            xion.add("-e");
+            xion.add(e);
+        }
+        for (String f : envFiles) {
+            xion.add("--env-file");
+            xion.add(f);
+        }
+        if (workdir != null) {
+            xion.add("-w");
+            xion.add(workdir);
+        }
+        if (autoRemove) {
+            xion.add("--rm");
+        }
+        if (restart != null) {
+            xion.add("--restart");
+            xion.add(restart);
         }
         xion.add("--");
         xion.add(binary);

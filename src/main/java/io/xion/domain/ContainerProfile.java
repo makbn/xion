@@ -1,6 +1,8 @@
 package io.xion.domain;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -18,6 +20,10 @@ public final class ContainerProfile {
     private final Optional<String> network;
     private final ResourceLimits limits;
     private final String runtimeDir;
+    private final Map<String, String> env;
+    private final Optional<String> workdir;
+    private final boolean autoRemove;
+    private final RestartPolicy restartPolicy;
 
     public ContainerProfile(
             String id,
@@ -29,6 +35,24 @@ public final class ContainerProfile {
             Optional<String> network,
             ResourceLimits limits,
             String runtimeDir) {
+        this(id, name, binary, args, volumes, ports, network, limits, runtimeDir,
+                Map.of(), Optional.empty(), false, RestartPolicy.NO);
+    }
+
+    public ContainerProfile(
+            String id,
+            String name,
+            String binary,
+            List<String> args,
+            List<VolumeMount> volumes,
+            List<PortMapping> ports,
+            Optional<String> network,
+            ResourceLimits limits,
+            String runtimeDir,
+            Map<String, String> env,
+            Optional<String> workdir,
+            boolean autoRemove,
+            RestartPolicy restartPolicy) {
         this.id = Objects.requireNonNull(id, "id");
         this.name = Objects.requireNonNull(name, "name");
         this.binary = Objects.requireNonNull(binary, "binary");
@@ -38,6 +62,10 @@ public final class ContainerProfile {
         this.network = network == null ? Optional.empty() : network;
         this.limits = limits == null ? ResourceLimits.unlimited() : limits;
         this.runtimeDir = Objects.requireNonNull(runtimeDir, "runtimeDir");
+        this.env = Map.copyOf(env == null ? Map.of() : new LinkedHashMap<>(env));
+        this.workdir = workdir == null ? Optional.empty() : workdir;
+        this.autoRemove = autoRemove;
+        this.restartPolicy = restartPolicy == null ? RestartPolicy.NO : restartPolicy;
     }
 
     public String id() {
@@ -76,11 +104,29 @@ public final class ContainerProfile {
         return runtimeDir;
     }
 
+    public Map<String, String> env() {
+        return env;
+    }
+
+    public Optional<String> workdir() {
+        return workdir;
+    }
+
+    public boolean autoRemove() {
+        return autoRemove;
+    }
+
+    public RestartPolicy restartPolicy() {
+        return restartPolicy;
+    }
+
     public ContainerProfile withId(String newId) {
-        return new ContainerProfile(newId, name, binary, args, volumes, ports, network, limits, runtimeDir);
+        return new ContainerProfile(newId, name, binary, args, volumes, ports, network, limits, runtimeDir,
+                env, workdir, autoRemove, restartPolicy);
     }
 
     public ContainerProfile withRuntimeDir(String dir) {
-        return new ContainerProfile(id, name, binary, args, volumes, ports, network, limits, dir);
+        return new ContainerProfile(id, name, binary, args, volumes, ports, network, limits, dir,
+                env, workdir, autoRemove, restartPolicy);
     }
 }
