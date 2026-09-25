@@ -1,6 +1,7 @@
 package io.xion.application.handlers;
 
 import io.xion.application.mediator.RequestHandler;
+import io.xion.domain.ContainerStatus;
 import io.xion.infrastructure.store.ContainerStore;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -22,6 +23,9 @@ public class ListContainersHandler implements RequestHandler<ListContainersQuery
 
     @Override
     public ListContainersResult handle(ListContainersQuery request) {
-        return new ListContainersResult(store.listAll());
+        if (request.all()) {
+            return new ListContainersResult(store.listAll());
+        }
+        return new ListContainersResult(store.listByStatus(ContainerStatus.RUNNING));
     }
 }

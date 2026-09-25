@@ -106,4 +106,14 @@ public final class ContainerRecord {
         return new ContainerRecord(id, name, binary, status, runtimeDir, pid, network,
                 createdAt, startedAt, Optional.ofNullable(at), profileJson);
     }
+
+    public ContainerRecord withNetwork(String newNetwork) {
+        return new ContainerRecord(id, name, binary, status, runtimeDir, pid,
+                Optional.ofNullable(newNetwork), createdAt, startedAt, stoppedAt, profileJson);
+    }
+
+    public ContainerRecord withProfileJson(String json) {
+        return new ContainerRecord(id, name, binary, status, runtimeDir, pid, network,
+                createdAt, startedAt, stoppedAt, json == null ? "{}" : json);
+    }
 }

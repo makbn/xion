@@ -89,19 +89,39 @@ public final class DockerCommandTranslator {
             }
             rest = rest.subList(1, rest.size());
         }
+        boolean all = false;
+        boolean quiet = false;
         List<String> dropped = new ArrayList<>();
         for (String a : rest) {
-            if (a.startsWith("-")) {
+            if ("-a".equals(a) || "--all".equals(a)) {
+                all = true;
+            } else if ("-q".equals(a) || "--quiet".equals(a)) {
+                quiet = true;
+            } else if ("-aq".equals(a) || "-qa".equals(a)) {
+                all = true;
+                quiet = true;
+            } else if (a.startsWith("-")) {
                 dropped.add(a);
             }
         }
         ensureDroppable(dropped, options);
+        List<String> xion = new ArrayList<>();
+        xion.add("ps");
+        if (all) {
+            xion.add("-a");
+        }
+        if (quiet) {
+            xion.add("-q");
+        }
+        List<String> warnings = dropped.isEmpty()
+                ? List.of()
+                : List.of("Ignored unsupported docker ps filters/flags");
         return new Translation(
-                List.of("ps"),
+                xion,
                 dropped,
-                dropped.isEmpty() ? List.of() : List.of("Ignored docker ps filters/flags; xion ps lists all containers"),
+                warnings,
                 !dropped.isEmpty(),
-                "docker ps → xion ps");
+                "docker ps" + (all ? " -a" : "") + " → xion " + String.join(" ", xion));
     }
 
     private Translation translateSimple(String xionCmd, List<String> rest, String noun, Options options) {
@@ -178,15 +198,55 @@ public final class DockerCommandTranslator {
 
     private Translation translateNetwork(List<String> rest, Options options) {
         if (rest.isEmpty()) {
-            throw new IllegalArgumentException("Expected: docker network create NAME");
+            throw new IllegalArgumentException("Expected: docker network create|ls|rm|inspect …");
         }
         String action = rest.getFirst().toLowerCase(Locale.ROOT);
-        if (!"create".equals(action)) {
-            throw new IllegalArgumentException("Only 'docker network create' is supported (got: network " + action + ")");
-        }
+        return switch (action) {
+            case "create" -> translateNetworkCreate(rest.subList(1, rest.size()), options);
+            case "ls", "list" -> {
+                List<String> dropped = new ArrayList<>();
+                for (String a : rest.subList(1, rest.size())) {
+                    if (a.startsWith("-")) {
+                        dropped.add(a);
+                    }
+                }
+                ensureDroppable(dropped, options);
+                yield new Translation(List.of("network", "ls"), dropped, List.of(), !dropped.isEmpty(),
+                        "docker network ls → xion network ls");
+            }
+            case "rm", "remove" -> {
+                if (rest.size() < 2) {
+                    throw new IllegalArgumentException("docker network rm requires a NAME");
+                }
+                boolean force = rest.stream().anyMatch(a -> "-f".equals(a) || "--force".equals(a));
+                String name = rest.stream().filter(a -> !a.startsWith("-")).skip(1).findFirst()
+                        .orElseThrow(() -> new IllegalArgumentException("docker network rm requires a NAME"));
+                List<String> xion = new ArrayList<>();
+                xion.add("network");
+                xion.add("rm");
+                if (force) {
+                    xion.add("--force");
+                }
+                xion.add(name);
+                yield new Translation(xion, List.of(), List.of(), false,
+                        "docker network rm → xion " + String.join(" ", xion));
+            }
+            case "inspect" -> {
+                if (rest.size() < 2) {
+                    throw new IllegalArgumentException("docker network inspect requires a NAME");
+                }
+                yield new Translation(List.of("network", "inspect", rest.get(1)), List.of(), List.of(), false,
+                        "docker network inspect → xion network inspect " + rest.get(1));
+            }
+            default -> throw new IllegalArgumentException(
+                    "Unsupported docker network action: " + action + " (create|ls|rm|inspect)");
+        };
+    }
+
+    private Translation translateNetworkCreate(List<String> rest, Options options) {
         List<String> dropped = new ArrayList<>();
         String name = null;
-        for (int i = 1; i < rest.size(); i++) {
+        for (int i = 0; i < rest.size(); i++) {
             String a = rest.get(i);
             if (a.startsWith("-")) {
                 if (isFlagWithValue(a) && i + 1 < rest.size() && !rest.get(i + 1).startsWith("-")) {

@@ -8,14 +8,26 @@ import io.xion.application.handlers.CreateContainerCommand;
 import io.xion.application.handlers.CreateContainerResult;
 import io.xion.application.handlers.CreateNetworkCommand;
 import io.xion.application.handlers.CreateNetworkResult;
+import io.xion.application.handlers.InspectContainerQuery;
+import io.xion.application.handlers.InspectContainerResult;
+import io.xion.application.handlers.InspectNetworkQuery;
+import io.xion.application.handlers.InspectNetworkResult;
 import io.xion.application.handlers.ListContainersQuery;
 import io.xion.application.handlers.ListContainersResult;
+import io.xion.application.handlers.ListNetworksQuery;
+import io.xion.application.handlers.ListNetworksResult;
 import io.xion.application.handlers.LogsQuery;
 import io.xion.application.handlers.LogsResult;
+import io.xion.application.handlers.RemoveContainerCommand;
+import io.xion.application.handlers.RemoveContainerResult;
+import io.xion.application.handlers.RemoveNetworkCommand;
+import io.xion.application.handlers.RemoveNetworkResult;
 import io.xion.application.handlers.StartContainerCommand;
 import io.xion.application.handlers.StartContainerResult;
 import io.xion.application.handlers.StopContainerCommand;
 import io.xion.application.handlers.StopContainerResult;
+import io.xion.application.handlers.UpdateContainerCommand;
+import io.xion.application.handlers.UpdateContainerResult;
 import io.xion.domain.ContainerRecord;
 import io.xion.domain.PortMapping;
 import io.xion.domain.ResourceLimits;
@@ -26,6 +38,7 @@ import jakarta.inject.Inject;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -51,8 +64,16 @@ public class IpcDispatcher {
                 case "start" -> mediator.send(new StartContainerCommand(text(payload, "id")));
                 case "stop" -> mediator.send(new StopContainerCommand(text(payload, "id")));
                 case "logs" -> mediator.send(new LogsQuery(text(payload, "id"), payload.path("stderr").asBoolean(false)));
-                case "ps", "list" -> mediator.send(new ListContainersQuery());
+                case "ps", "list" -> mediator.send(new ListContainersQuery(payload.path("all").asBoolean(false)));
+                case "inspect" -> mediator.send(new InspectContainerQuery(text(payload, "id")));
+                case "rm", "remove" -> mediator.send(new RemoveContainerCommand(
+                        text(payload, "id"), payload.path("force").asBoolean(false)));
+                case "update" -> mediator.send(toUpdate(payload));
                 case "network.create" -> mediator.send(new CreateNetworkCommand(text(payload, "name")));
+                case "network.ls", "network.list" -> mediator.send(new ListNetworksQuery());
+                case "network.rm", "network.remove" -> mediator.send(new RemoveNetworkCommand(
+                        text(payload, "name"), payload.path("force").asBoolean(false)));
+                case "network.inspect" -> mediator.send(new InspectNetworkQuery(text(payload, "name")));
                 case "ping" -> mapper.createObjectNode().put("pong", true);
                 default -> throw new IllegalArgumentException("Unknown command: " + request.type());
             };
@@ -60,6 +81,21 @@ public class IpcDispatcher {
         } catch (Exception e) {
             return IpcEnvelope.failure(request.type(), request.requestId(), e.getMessage());
         }
+    }
+
+    private UpdateContainerCommand toUpdate(JsonNode payload) {
+        Optional<String> memory = payload.hasNonNull("memory")
+                ? Optional.of(payload.get("memory").asText())
+                : Optional.empty();
+        Optional<Double> cpus = payload.hasNonNull("cpus")
+                ? Optional.of(payload.get("cpus").asDouble())
+                : Optional.empty();
+        Optional<String> network = payload.hasNonNull("network")
+                ? Optional.of(payload.get("network").asText())
+                : Optional.empty();
+        boolean disconnect = payload.path("disconnectNetwork").asBoolean(false)
+                || payload.path("networkNone").asBoolean(false);
+        return new UpdateContainerCommand(text(payload, "id"), memory, cpus, network, disconnect);
     }
 
     private CreateContainerCommand toCreate(JsonNode payload) {
@@ -134,21 +170,78 @@ public class IpcDispatcher {
         if (result instanceof CreateNetworkResult r) {
             return mapper.createObjectNode().put("name", r.name());
         }
+        if (result instanceof RemoveNetworkResult r) {
+            return mapper.createObjectNode().put("name", r.name()).put("removed", r.removed());
+        }
+        if (result instanceof RemoveContainerResult r) {
+            return mapper.createObjectNode()
+                    .put("id", r.id())
+                    .put("name", r.name())
+                    .put("removed", r.removed());
+        }
+        if (result instanceof UpdateContainerResult r) {
+            return mapper.createObjectNode()
+                    .put("id", r.id())
+                    .put("name", r.name())
+                    .put("status", r.status())
+                    .put("message", r.message())
+                    .put("restartRequired", r.restartRequired());
+        }
+        if (result instanceof InspectContainerResult r) {
+            return containerNode(r.container());
+        }
+        if (result instanceof InspectNetworkResult r) {
+            ObjectNode root = mapper.createObjectNode();
+            root.put("name", r.name());
+            ArrayNode members = root.putArray("members");
+            r.members().forEach(members::add);
+            ObjectNode eps = root.putObject("endpoints");
+            for (Map.Entry<String, String> e : r.endpoints().entrySet()) {
+                eps.put(e.getKey(), e.getValue());
+            }
+            return root;
+        }
+        if (result instanceof ListNetworksResult r) {
+            ObjectNode root = mapper.createObjectNode();
+            ArrayNode arr = root.putArray("networks");
+            for (ListNetworksResult.NetworkInfo n : r.networks()) {
+                ObjectNode o = arr.addObject();
+                o.put("name", n.name());
+                o.put("memberCount", n.memberCount());
+                ArrayNode members = o.putArray("members");
+                n.members().forEach(members::add);
+            }
+            return root;
+        }
         if (result instanceof ListContainersResult r) {
             ObjectNode root = mapper.createObjectNode();
             ArrayNode arr = root.putArray("containers");
             for (ContainerRecord c : r.containers()) {
-                ObjectNode n = arr.addObject();
-                n.put("id", c.id());
-                n.put("name", c.name());
-                n.put("binary", c.binary());
-                n.put("status", c.status().name());
-                c.pid().ifPresent(pid -> n.put("pid", pid));
-                c.network().ifPresent(net -> n.put("network", net));
+                arr.add(containerNode(c));
             }
             return root;
         }
         return mapper.valueToTree(result);
+    }
+
+    private ObjectNode containerNode(ContainerRecord c) {
+        ObjectNode n = mapper.createObjectNode();
+        n.put("id", c.id());
+        n.put("name", c.name());
+        n.put("binary", c.binary());
+        n.put("status", c.status().name());
+        n.put("runtimeDir", c.runtimeDir());
+        n.put("createdAt", c.createdAt().toString());
+        c.pid().ifPresent(pid -> n.put("pid", pid));
+        c.network().ifPresent(net -> n.put("network", net));
+        c.startedAt().ifPresent(t -> n.put("startedAt", t.toString()));
+        c.stoppedAt().ifPresent(t -> n.put("stoppedAt", t.toString()));
+        try {
+            n.set("profile", mapper.readTree(c.profileJson()));
+        } catch (Exception e) {
+            n.put("profileJson", c.profileJson());
+        }
+        return n;
     }
 
     private static String text(JsonNode payload, String field) {

@@ -93,8 +93,34 @@ class LifecycleIntegrationTest {
                 .isTrue();
         assertThat(created.payload().get("id").asText()).isNotBlank();
 
-        var ps = client.send("ps", client.object());
+        var ps = client.send("ps", client.object().put("all", true));
         assertThat(ps.ok()).isTrue();
         assertThat(ps.payload().path("containers").toString()).contains(name);
+    }
+
+    @Test
+    void networkLsAndUpdateResources() {
+        String net = "net-" + UUID.randomUUID().toString().substring(0, 8);
+        mediator.send(new CreateNetworkCommand(net));
+        ListNetworksResult nets = mediator.send(new ListNetworksQuery());
+        assertThat(nets.networks()).anyMatch(n -> n.name().equals(net));
+
+        String name = "upd-" + UUID.randomUUID().toString().substring(0, 8);
+        CreateContainerResult created = mediator.send(new CreateContainerCommand(
+                name, "sleep", List.of("1"), List.of(), List.of(),
+                Optional.empty(), ResourceLimits.unlimited()));
+        UpdateContainerResult updated = mediator.send(new UpdateContainerCommand(
+                created.id(),
+                Optional.of("128m"),
+                Optional.of(1.0),
+                Optional.of(net),
+                false));
+        assertThat(updated.message()).contains("memory");
+        assertThat(store.findById(created.id()).orElseThrow().network()).contains(net);
+
+        ListContainersResult all = mediator.send(new ListContainersQuery(true));
+        assertThat(all.containers()).anyMatch(c -> c.name().equals(name));
+        ListContainersResult running = mediator.send(new ListContainersQuery(false));
+        assertThat(running.containers()).noneMatch(c -> c.name().equals(name));
     }
 }

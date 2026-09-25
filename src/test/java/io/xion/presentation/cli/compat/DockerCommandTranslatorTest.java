@@ -56,12 +56,16 @@ class DockerCommandTranslatorTest {
 
     @Test
     void translatesPsStopLogsNetwork() {
-        assertThat(translator.translate(List.of("ps", "-a"), allow()).xionArgs()).containsExactly("ps");
+        assertThat(translator.translate(List.of("ps", "-a")).xionArgs()).containsExactly("ps", "-a");
+        assertThat(translator.translate(List.of("ps"), allow()).xionArgs()).containsExactly("ps");
+        assertThat(translator.translate(List.of("ps", "-a"), allow()).xionArgs()).containsExactly("ps", "-a");
         assertThat(translator.translate(List.of("stop", "web")).xionArgs()).containsExactly("stop", "web");
         assertThat(translator.translate(List.of("logs", "-f", "web"), allow()).xionArgs())
                 .containsExactly("logs", "web");
         assertThat(translator.translate(List.of("network", "create", "frontend")).xionArgs())
                 .containsExactly("network", "create", "frontend");
+        assertThat(translator.translate(List.of("network", "ls")).xionArgs())
+                .containsExactly("network", "ls");
         assertThat(translator.translate(List.of("version")).xionArgs()).containsExactly("version");
     }
 

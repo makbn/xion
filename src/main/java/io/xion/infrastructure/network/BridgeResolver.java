@@ -7,6 +7,7 @@ import java.net.URI;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -44,6 +45,37 @@ public class BridgeResolver {
                 bridge.detach(containerName);
             }
         }
+    }
+
+    public Optional<String> networkOf(String containerName) {
+        return Optional.ofNullable(containerNetwork.get(containerName));
+    }
+
+    public Optional<String> endpointOf(String containerName) {
+        return Optional.ofNullable(endpoints.get(containerName));
+    }
+
+    /**
+     * Remove a bridge. Fails if members are still attached unless {@code force}.
+     */
+    public void removeNetwork(String name, boolean force) {
+        NetworkBridge bridge = bridges.get(name);
+        if (bridge == null) {
+            throw new IllegalArgumentException("Network not found: " + name);
+        }
+        if (!bridge.members().isEmpty() && !force) {
+            throw new IllegalStateException(
+                    "Network '" + name + "' has members " + bridge.members()
+                            + "; disconnect them or pass --force");
+        }
+        for (String member : Set.copyOf(bridge.members())) {
+            detach(member);
+        }
+        bridges.remove(name);
+    }
+
+    public java.util.List<NetworkBridge> listNetworks() {
+        return bridges.values().stream().sorted(java.util.Comparator.comparing(NetworkBridge::name)).toList();
     }
 
     /**
