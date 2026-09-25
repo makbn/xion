@@ -234,7 +234,7 @@ public class DockerCompatCommand implements Callable<Integer> {
         out.println("Docker → Xion translation");
         out.println("────────────────────────");
         out.println("Input : " + inputLabel);
-        out.println("Output: xion " + String.join(" ", translation.xionArgs()));
+        out.println("Output: " + shellJoin(translation.xionArgs()));
         out.println("Note  : " + translation.summary());
         if (!quietDrop) {
             if (!translation.dropped().isEmpty()) {
