@@ -70,6 +70,43 @@ class PortProxyTest {
         }
     }
 
+    @Test
+    void forwardsMultiMegabytePayload() throws Exception {
+        byte[] payload = new byte[2 * 1024 * 1024];
+        for (int i = 0; i < payload.length; i++) {
+            payload[i] = (byte) (i & 0xff);
+        }
+        try (ServerSocket upstream = new ServerSocket(0)) {
+            int containerPort = upstream.getLocalPort();
+            ExecutorService pool = Executors.newSingleThreadExecutor();
+            pool.submit(() -> {
+                try (Socket s = upstream.accept()) {
+                    s.getInputStream().readNBytes(4); // "GET\n"
+                    s.getOutputStream().write(payload);
+                    s.getOutputStream().flush();
+                } catch (Exception ignored) {
+                }
+            });
+
+            int hostPort = freePort();
+            try (PortProxy proxy = new PortProxy()) {
+                proxy.start(List.of(new PortMapping(hostPort, containerPort, "tcp")), "127.0.0.1");
+                Thread.sleep(50);
+                try (Socket client = new Socket()) {
+                    client.connect(new InetSocketAddress("127.0.0.1", hostPort), 2000);
+                    client.setSoTimeout(10_000);
+                    client.getOutputStream().write("GET\n".getBytes(StandardCharsets.UTF_8));
+                    client.getOutputStream().flush();
+                    byte[] got = client.getInputStream().readNBytes(payload.length);
+                    assertThat(got).hasSize(payload.length);
+                    assertThat(got[0]).isEqualTo(payload[0]);
+                    assertThat(got[payload.length - 1]).isEqualTo(payload[payload.length - 1]);
+                }
+            }
+            pool.shutdownNow();
+        }
+    }
+
     private static void echoOnce(ServerSocket upstream) {
         try (Socket s = upstream.accept()) {
             byte[] buf = s.getInputStream().readNBytes(5);
