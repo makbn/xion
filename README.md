@@ -109,34 +109,46 @@ Every command has Docker-style detailed help (description, options, examples):
 ./target/*-runner help network
 ```
 
-### Docker → Xion translator
+## Commands
 
-`xion docker` (aliases: `from-docker`, `compat`) accepts a Docker CLI command **or a
-Dockerfile**, shows the mapped Xion argv, asks for approval, then executes:
+| Command | Description |
+| --- | --- |
+| `daemon` | Start/stop the background daemon (UDS, Seatbelt, proxies, SQLite). |
+| `run` | Create a container profile and start it immediately. |
+| `create` | Create a container record without starting it. |
+| `start` | Start a created or stopped container by id or name. |
+| `stop` | Stop a running container (SIGTERM, tear down proxy). |
+| `ps` | List containers (running by default; `-a` for all). |
+| `logs` | Print captured stdout or stderr for a container. |
+| `inspect` | Show container details as JSON. |
+| `update` | Change memory/CPU limits and/or bridge network. |
+| `rm` | Remove a container from the store (`--force` to stop first). |
+| `network` | Manage bridge networks with per-app IPs (`create`, `ls`, `inspect`, `rm`). |
+| `docker` | Translate a Docker CLI command or Dockerfile into Xion. |
+| `version` | Print the Xion version (daemon not required). |
+| `help` | Show help for any subcommand (`xion help network`). |
+
+### `docker` examples
+
+`xion docker` (aliases: `from-docker`, `compat`) shows the mapped Xion argv, asks for
+approval, then executes. Use `--yes` to skip the prompt and `--allow-partial` when
+some Docker flags cannot be mapped 1:1.
+
+**From a `docker run` command:**
 
 ```bash
-# Interactive from a docker run line
-./target/*-runner docker -- run -d --name web -p 8080:80 nginx
-
-# From a Dockerfile (ENTRYPOINT/CMD → xion run)
-./target/*-runner docker -f Dockerfile --name web --yes
-./target/*-runner docker --dockerfile ./deploy/Dockerfile \
-  --dry-run --volume-host-root /srv/data
-./target/*-runner docker -f Dockerfile --name api -- \
-  --memory 512m -p 8080:8080
-
-# Skip confirmation + allow unsupported flags to be dropped
 ./target/*-runner docker --yes --allow-partial -- \
-  run -it --rm -e FOO=1 -p 8080:80 --memory 256m nginx:latest
-
-# Preview only / skip bad port specs
-./target/*-runner docker --dry-run --allow-partial --partial-ports -- \
-  run -p 80 -p 9000:90 /usr/bin/sleep 30
+  run -d --name web -p 8080:80 --memory 256m nginx
 ```
 
-Dockerfile mode maps **ENTRYPOINT + CMD** to `xion run`, optionally `EXPOSE` → `-p N:N`
-(`--publish-expose`), `VOLUME` → `-v` (`--volume-host-root DIR`), and `WORKDIR` via
-`sh -c 'cd … && exec …'`. Build layers (`FROM`/`RUN`/`COPY`/…) are not executed.
+**From a Dockerfile** (maps `ENTRYPOINT`/`CMD` → `xion run`; build layers are not executed):
+
+```bash
+./target/*-runner docker -f Dockerfile --name web --publish-expose --yes
+```
+
+Dockerfile mode optionally maps `EXPOSE` → `-p N:N` (`--publish-expose`), `VOLUME` → `-v`
+(`--volume-host-root DIR`), and `WORKDIR` via `sh -c 'cd … && exec …'`.
 
 Useful flags: `--yes`/`-y`, `--dry-run`, `--print-only`, `--allow-partial`,
 `--drop-unsupported`, `--partial-ports`, `--keep-image-tag`,
@@ -159,6 +171,27 @@ Useful flags: `--yes`/`-y`, `--dry-run`, `--print-only`, `--allow-partial`,
 ./target/*-runner stop web
 ```
 
+### Networking: same container port, different host ports
+
+Each bridge network owns a subnet (default `10.89.N.0/24`). On start, Xion assigns the
+container a unique loopback IP (via `lo0` alias on macOS), injects `XION_IP` /
+`XION_NETWORK` / `PORT`, and reverse-proxies published host ports to
+`containerIP:containerPort`.
+
+Apps must bind to `$XION_IP:$PORT` (not `0.0.0.0`) so two containers can both use
+listen port `8087`:
+
+```bash
+./target/*-runner network create frontend
+# app1 → e.g. 10.89.0.2:8087  published as localhost:9000
+./target/*-runner run --name app1 --network frontend -p 9000:8087 -- /path/to/app1
+# app2 → e.g. 10.89.0.3:8087  published as localhost:9001
+./target/*-runner run --name app2 --network frontend -p 9001:8087 -- /path/to/app2
+```
+
+Optional custom subnet: `xion network create backend --subnet 10.89.5.0/24`.
+Managing `lo0` aliases typically requires elevated privileges for the daemon.
+
 On macOS, `run`/`start` generate Seatbelt profiles under `/tmp/xion-profiles/` and
 spawn via `sandbox-exec`. On Linux (CI), a fake sandbox executor runs the binary
 directly so unit/integration tests pass without Darwin APIs.
@@ -173,7 +206,7 @@ io.xion
 ├── domain                    # ContainerProfile, ResourceLimits, …
 ├── infrastructure.ipc        # Length-prefixed JSON over UDS
 ├── infrastructure.seatbelt   # .sb generator + SandboxExecutor
-├── infrastructure.network    # NIO port proxy + bridge resolver
+├── infrastructure.network    # Namespace IPs + reverse PortProxy + bridges
 ├── infrastructure.resources  # FFM setrlimit / taskpolicy governor
 └── infrastructure.store      # SQLite container state
 ```

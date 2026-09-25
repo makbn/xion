@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Real macOS Seatbelt executor: {@code sandbox-exec -f <profile> <binary> …}.
@@ -17,7 +18,7 @@ public class DarwinSandboxExecutor implements SandboxExecutor {
 
     @Override
     public SpawnedProcess spawn(Path profileFile, String binary, List<String> args, Path workDir,
-                                Path stdoutLog, Path stderrLog) throws Exception {
+                                Path stdoutLog, Path stderrLog, Map<String, String> env) throws Exception {
         Files.createDirectories(workDir);
         if (stdoutLog != null) {
             Files.createDirectories(stdoutLog.getParent());
@@ -35,6 +36,9 @@ public class DarwinSandboxExecutor implements SandboxExecutor {
         }
         ProcessBuilder pb = new ProcessBuilder(command);
         pb.directory(workDir.toFile());
+        if (env != null && !env.isEmpty()) {
+            pb.environment().putAll(env);
+        }
         if (stdoutLog != null) {
             pb.redirectOutput(stdoutLog.toFile());
         } else {

@@ -29,7 +29,12 @@ public class ListNetworksHandler implements RequestHandler<ListNetworksQuery, Li
         List<ListNetworksResult.NetworkInfo> infos = new ArrayList<>();
         for (NetworkBridge bridge : bridges.listNetworks()) {
             List<String> members = bridge.members().stream().sorted().toList();
-            infos.add(new ListNetworksResult.NetworkInfo(bridge.name(), members.size(), members));
+            infos.add(new ListNetworksResult.NetworkInfo(
+                    bridge.name(),
+                    bridge.cidr().orElse(null),
+                    bridge.gateway().orElse(null),
+                    members.size(),
+                    members));
         }
         return new ListNetworksResult(infos);
     }

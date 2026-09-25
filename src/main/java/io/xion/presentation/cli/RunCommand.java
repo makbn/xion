@@ -61,9 +61,9 @@ public class RunCommand implements Callable<Integer> {
             paramLabel = "HOST:CONTAINER[/PROTO]",
             split = ",",
             description = {
-                    "Publish a container port on the host. The daemon listens on HOST and proxies",
-                    "TCP to 127.0.0.1:CONTAINER inside the sandboxed process's loopback view.",
-                    "Protocol defaults to tcp. Example: -p 8080:80 or -p 53:53/udp (udp ignored today)."
+                    "Publish a container port on the host. The daemon listens on HOST and reverse-proxies",
+                    "TCP to the container's assigned IP:CONTAINER (or 127.0.0.1 when not on a network).",
+                    "Protocol defaults to tcp. Example: -p 9000:8087 or -p 53:53/udp (udp ignored today)."
             })
     List<String> ports = new ArrayList<>();
 

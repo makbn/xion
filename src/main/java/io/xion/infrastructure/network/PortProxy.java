@@ -19,7 +19,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Java NIO TCP port proxy: host -p 8080:80 → listen 8080, forward to 127.0.0.1:containerPort.
+ * Java NIO reverse proxy: host -p 9000:8087 → listen 9000, forward to targetHost:8087
+ * (per-container IP when networks assign loopback aliases).
  */
 public final class PortProxy implements AutoCloseable {
 
@@ -34,6 +35,14 @@ public final class PortProxy implements AutoCloseable {
 
     public void setTargetHost(String host) {
         this.targetHost = host;
+    }
+
+    /**
+     * Listen on host ports and reverse-proxy TCP to {@code targetHost}:containerPort.
+     */
+    public synchronized void start(List<PortMapping> mappings, String targetHost) throws IOException {
+        setTargetHost(targetHost == null || targetHost.isBlank() ? "127.0.0.1" : targetHost);
+        start(mappings);
     }
 
     public synchronized void start(List<PortMapping> mappings) throws IOException {
@@ -59,7 +68,7 @@ public final class PortProxy implements AutoCloseable {
             return t;
         });
         loop.submit(this::selectLoop);
-        LOG.infof("Port proxy listening on %s", hostToContainer.keySet());
+        LOG.infof("Port proxy listening on %s → %s", hostToContainer.keySet(), targetHost);
     }
 
     private void selectLoop() {

@@ -1,6 +1,7 @@
 package io.xion.application.handlers;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.xion.application.mediator.RequestHandler;
 import io.xion.domain.ContainerProfile;
 import io.xion.domain.ContainerRecord;
@@ -23,7 +24,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 @ApplicationScoped
@@ -70,10 +73,21 @@ public class StartContainerHandler implements RequestHandler<StartContainerComma
             throw new IllegalStateException("Container already running: " + record.id());
         }
         ContainerProfile profile = deserialize(record);
+        String allocatedIp = null;
         try {
             Files.createDirectories(paths.containerDir(record.id()));
+
+            int firstContainerPort = profile.ports().isEmpty() ? 0 : profile.ports().getFirst().containerPort();
             int proxyPort = profile.ports().isEmpty() ? 0 : profile.ports().getFirst().hostPort();
-            Path sb = profileGenerator.writeProfile(profile, proxyPort);
+
+            if (profile.network().isPresent()) {
+                String net = profile.network().get();
+                bridges.createNetwork(net);
+                allocatedIp = bridges.attachWithIp(net, profile.name(), firstContainerPort);
+            }
+
+            String targetHost = allocatedIp != null ? allocatedIp : "127.0.0.1";
+            Path sb = profileGenerator.writeProfile(profile, proxyPort, allocatedIp);
 
             resourceGovernor.apply(profile.limits());
 
@@ -81,10 +95,17 @@ public class StartContainerHandler implements RequestHandler<StartContainerComma
             command.add(profile.binary());
             command.addAll(profile.args());
             List<String> wrapped = resourceGovernor.wrapCommand(command, profile.limits());
-            // wrapCommand may prepend taskpolicy; SandboxExecutor expects binary + args.
-            // For Darwin governor wrapping, pass full wrapped list via binary=first, args=rest.
             String binary = wrapped.getFirst();
             List<String> args = wrapped.size() > 1 ? wrapped.subList(1, wrapped.size()) : List.of();
+
+            Map<String, String> env = new HashMap<>();
+            if (allocatedIp != null) {
+                env.put("XION_IP", allocatedIp);
+                profile.network().ifPresent(n -> env.put("XION_NETWORK", n));
+            }
+            if (firstContainerPort > 0) {
+                env.put("PORT", Integer.toString(firstContainerPort));
+            }
 
             SandboxExecutor.SpawnedProcess spawned = sandboxExecutor.spawn(
                     sb,
@@ -92,31 +113,42 @@ public class StartContainerHandler implements RequestHandler<StartContainerComma
                     args,
                     paths.containerDir(record.id()),
                     paths.stdoutLog(record.id()),
-                    paths.stderrLog(record.id()));
+                    paths.stderrLog(record.id()),
+                    env);
 
             processRegistry.register(record.id(), spawned.process());
 
             if (!profile.ports().isEmpty()) {
                 PortProxy proxy = new PortProxy();
-                proxy.start(profile.ports());
+                proxy.start(profile.ports(), targetHost);
                 processRegistry.registerProxy(record.id(), proxy);
             }
 
-            profile.network().ifPresent(net -> {
-                String endpoint = "127.0.0.1:" + (profile.ports().isEmpty()
-                        ? 0
-                        : profile.ports().getFirst().containerPort());
-                bridges.attach(net, profile.name(), endpoint);
-            });
-
+            // Persist allocated IP into profile for inspect
             ContainerRecord updated = record
                     .withStatus(ContainerStatus.RUNNING)
                     .withPid(spawned.pid())
                     .withStartedAt(Instant.now());
+            if (allocatedIp != null) {
+                updated = updated.withProfileJson(withIp(record.profileJson(), allocatedIp));
+            }
             store.update(updated);
             return new StartContainerResult(record.id(), record.name(), spawned.pid(), ContainerStatus.RUNNING.name());
         } catch (Exception e) {
+            if (allocatedIp != null) {
+                bridges.detach(profile.name());
+            }
             throw new IllegalStateException("Failed to start container: " + e.getMessage(), e);
+        }
+    }
+
+    private String withIp(String profileJson, String ip) {
+        try {
+            ObjectNode node = (ObjectNode) mapper.readTree(profileJson);
+            node.put("ip", ip);
+            return node.toString();
+        } catch (Exception e) {
+            return profileJson;
         }
     }
 

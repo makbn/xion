@@ -37,7 +37,7 @@ class PortProxyTest {
                 probe.close();
 
                 try (PortProxy proxy = new PortProxy()) {
-                    proxy.start(List.of(new PortMapping(hostPort, containerPort, "tcp")));
+                    proxy.start(List.of(new PortMapping(hostPort, containerPort, "tcp")), "127.0.0.1");
                     assertThat(proxy.isRunning()).isTrue();
                     Thread.sleep(100);
 
@@ -53,6 +53,22 @@ class PortProxyTest {
                 }
             }
             pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void targetHostIsRecordedInMappings() throws Exception {
+        try (ServerSocket upstream = new ServerSocket()) {
+            upstream.bind(new InetSocketAddress("127.0.0.1", 0));
+            int containerPort = upstream.getLocalPort();
+            try (ServerSocket probe = new ServerSocket(0)) {
+                int hostPort = probe.getLocalPort();
+                probe.close();
+                try (PortProxy proxy = new PortProxy()) {
+                    proxy.start(List.of(new PortMapping(hostPort, containerPort, "tcp")), "127.0.0.1");
+                    assertThat(proxy.mappings()).containsEntry(hostPort, containerPort);
+                }
+            }
         }
     }
 }

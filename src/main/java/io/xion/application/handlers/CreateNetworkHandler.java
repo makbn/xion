@@ -1,6 +1,7 @@
 package io.xion.application.handlers;
 
 import io.xion.application.mediator.RequestHandler;
+import io.xion.domain.NetworkBridge;
 import io.xion.infrastructure.network.BridgeResolver;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -25,7 +26,10 @@ public class CreateNetworkHandler implements RequestHandler<CreateNetworkCommand
         if (request.name() == null || request.name().isBlank()) {
             throw new IllegalArgumentException("network name required");
         }
-        bridges.createNetwork(request.name());
-        return new CreateNetworkResult(request.name());
+        NetworkBridge bridge = bridges.createNetwork(request.name(), request.subnet());
+        return new CreateNetworkResult(
+                bridge.name(),
+                bridge.cidr().orElse(null),
+                bridge.gateway().orElse(null));
     }
 }

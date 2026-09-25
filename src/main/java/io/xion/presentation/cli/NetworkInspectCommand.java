@@ -14,7 +14,7 @@ import java.util.concurrent.Callable;
         parameterListHeading = "%nArguments:%n%n",
         footerHeading = "%nExamples:%n%n",
         description = {
-                "Show JSON details for a bridge network (members + endpoints).",
+                "Show JSON details for a bridge network (subnet, gateway, members, IPs, endpoints).",
                 "",
                 "Requires a running daemon."
         },

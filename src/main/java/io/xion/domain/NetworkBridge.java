@@ -1,34 +1,52 @@
 package io.xion.domain;
 
+import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Named bridge network: registry of container names/ids attached to the network.
+ * Named bridge network snapshot: members, subnet, gateway, and member IPs.
  */
 public final class NetworkBridge {
 
     private final String name;
-    private final Set<String> members = ConcurrentHashMap.newKeySet();
+    private final String cidr;
+    private final String gateway;
+    private final Set<String> members;
+    private final Map<String, String> memberIps;
 
-    public NetworkBridge(String name) {
+    public NetworkBridge(
+            String name,
+            String cidr,
+            String gateway,
+            Set<String> members,
+            Map<String, String> memberIps) {
         this.name = Objects.requireNonNull(name, "name");
         if (name.isBlank()) {
             throw new IllegalArgumentException("network name must not be blank");
         }
+        this.cidr = cidr;
+        this.gateway = gateway;
+        this.members = Set.copyOf(members == null ? Set.of() : members);
+        this.memberIps = Map.copyOf(memberIps == null ? Map.of() : memberIps);
+    }
+
+    /** Backward-compatible constructor used by older call sites / tests. */
+    public NetworkBridge(String name) {
+        this(name, null, null, Set.of(), Map.of());
     }
 
     public String name() {
         return name;
     }
 
-    public void attach(String containerName) {
-        members.add(Objects.requireNonNull(containerName));
+    public Optional<String> cidr() {
+        return Optional.ofNullable(cidr);
     }
 
-    public void detach(String containerName) {
-        members.remove(containerName);
+    public Optional<String> gateway() {
+        return Optional.ofNullable(gateway);
     }
 
     public boolean contains(String containerName) {
@@ -36,6 +54,10 @@ public final class NetworkBridge {
     }
 
     public Set<String> members() {
-        return Set.copyOf(members);
+        return members;
+    }
+
+    public Map<String, String> memberIps() {
+        return memberIps;
     }
 }

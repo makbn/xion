@@ -16,7 +16,7 @@ import java.util.concurrent.Callable;
         description = {
                 "List bridge networks known to the daemon.",
                 "",
-                "Columns: NAME, MEMBERS (count), MEMBER NAMES.",
+                "Columns: NAME, SUBNET, GATEWAY, MEMBERS, CONTAINERS.",
                 "",
                 "Requires a running daemon."
         },
@@ -48,7 +48,7 @@ public class NetworkLsCommand implements Callable<Integer> {
             networks.forEach(n -> out.println(n.path("name").asText()));
             return 0;
         }
-        out.printf("%-20s %-8s %s%n", "NAME", "MEMBERS", "CONTAINERS");
+        out.printf("%-16s %-18s %-15s %-8s %s%n", "NAME", "SUBNET", "GATEWAY", "MEMBERS", "CONTAINERS");
         networks.forEach(n -> {
             String members = "";
             if (n.path("members").isArray()) {
@@ -61,8 +61,10 @@ public class NetworkLsCommand implements Callable<Integer> {
                 });
                 members = sb.toString();
             }
-            out.printf("%-20s %-8d %s%n",
+            out.printf("%-16s %-18s %-15s %-8d %s%n",
                     n.path("name").asText(),
+                    n.path("subnet").asText("-"),
+                    n.path("gateway").asText("-"),
                     n.path("memberCount").asInt(0),
                     members.isBlank() ? "-" : members);
         });

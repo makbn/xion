@@ -69,7 +69,9 @@ public class IpcDispatcher {
                 case "rm", "remove" -> mediator.send(new RemoveContainerCommand(
                         text(payload, "id"), payload.path("force").asBoolean(false)));
                 case "update" -> mediator.send(toUpdate(payload));
-                case "network.create" -> mediator.send(new CreateNetworkCommand(text(payload, "name")));
+                case "network.create" -> mediator.send(new CreateNetworkCommand(
+                        text(payload, "name"),
+                        payload.hasNonNull("subnet") ? payload.get("subnet").asText() : null));
                 case "network.ls", "network.list" -> mediator.send(new ListNetworksQuery());
                 case "network.rm", "network.remove" -> mediator.send(new RemoveNetworkCommand(
                         text(payload, "name"), payload.path("force").asBoolean(false)));
@@ -168,7 +170,14 @@ public class IpcDispatcher {
                     .put("content", r.content());
         }
         if (result instanceof CreateNetworkResult r) {
-            return mapper.createObjectNode().put("name", r.name());
+            ObjectNode n = mapper.createObjectNode().put("name", r.name());
+            if (r.subnet() != null) {
+                n.put("subnet", r.subnet());
+            }
+            if (r.gateway() != null) {
+                n.put("gateway", r.gateway());
+            }
+            return n;
         }
         if (result instanceof RemoveNetworkResult r) {
             return mapper.createObjectNode().put("name", r.name()).put("removed", r.removed());
@@ -193,11 +202,23 @@ public class IpcDispatcher {
         if (result instanceof InspectNetworkResult r) {
             ObjectNode root = mapper.createObjectNode();
             root.put("name", r.name());
+            if (r.subnet() != null) {
+                root.put("subnet", r.subnet());
+            }
+            if (r.gateway() != null) {
+                root.put("gateway", r.gateway());
+            }
             ArrayNode members = root.putArray("members");
             r.members().forEach(members::add);
             ObjectNode eps = root.putObject("endpoints");
             for (Map.Entry<String, String> e : r.endpoints().entrySet()) {
                 eps.put(e.getKey(), e.getValue());
+            }
+            ObjectNode ips = root.putObject("memberIps");
+            if (r.memberIps() != null) {
+                for (Map.Entry<String, String> e : r.memberIps().entrySet()) {
+                    ips.put(e.getKey(), e.getValue());
+                }
             }
             return root;
         }
@@ -207,6 +228,12 @@ public class IpcDispatcher {
             for (ListNetworksResult.NetworkInfo n : r.networks()) {
                 ObjectNode o = arr.addObject();
                 o.put("name", n.name());
+                if (n.subnet() != null) {
+                    o.put("subnet", n.subnet());
+                }
+                if (n.gateway() != null) {
+                    o.put("gateway", n.gateway());
+                }
                 o.put("memberCount", n.memberCount());
                 ArrayNode members = o.putArray("members");
                 n.members().forEach(members::add);

@@ -34,6 +34,12 @@ public class InspectNetworkHandler implements RequestHandler<InspectNetworkQuery
         for (String member : members) {
             bridges.endpointOf(member).ifPresent(ep -> endpoints.put(member, ep));
         }
-        return new InspectNetworkResult(bridge.name(), members, endpoints);
+        return new InspectNetworkResult(
+                bridge.name(),
+                bridge.cidr().orElse(null),
+                bridge.gateway().orElse(null),
+                members,
+                endpoints,
+                bridge.memberIps());
     }
 }

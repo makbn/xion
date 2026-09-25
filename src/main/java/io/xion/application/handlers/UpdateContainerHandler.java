@@ -81,6 +81,7 @@ public class UpdateContainerHandler implements RequestHandler<UpdateContainerCom
         if (request.disconnectNetwork()) {
             bridges.detach(record.name());
             profile.putNull("network");
+            profile.remove("ip");
             updated = updated.withNetwork(null);
             notes.add("detached from network");
         } else if (request.network().isPresent()) {
@@ -88,16 +89,21 @@ public class UpdateContainerHandler implements RequestHandler<UpdateContainerCom
             bridges.createNetwork(net);
             bridges.detach(record.name());
             if (record.status() == ContainerStatus.RUNNING) {
-                String endpoint = "127.0.0.1:0";
+                int containerPort = 0;
                 try {
                     JsonNode ports = profile.path("ports");
                     if (ports.isArray() && !ports.isEmpty()) {
-                        endpoint = "127.0.0.1:" + ports.get(0).path("containerPort").asInt(0);
+                        containerPort = ports.get(0).path("containerPort").asInt(0);
                     }
                 } catch (Exception ignored) {
                 }
-                bridges.attach(net, record.name(), endpoint);
-                notes.add("reattached to network " + net + " (live)");
+                try {
+                    String ip = bridges.attachWithIp(net, record.name(), containerPort);
+                    profile.put("ip", ip);
+                    notes.add("reattached to network " + net + " @ " + ip + " (live)");
+                } catch (Exception e) {
+                    throw new IllegalStateException("Failed to attach to network " + net + ": " + e.getMessage(), e);
+                }
             } else {
                 notes.add("network → " + net + " (applies on next start)");
             }

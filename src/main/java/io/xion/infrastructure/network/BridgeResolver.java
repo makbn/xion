@@ -2,49 +2,86 @@ package io.xion.infrastructure.network;
 
 import io.xion.domain.NetworkBridge;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 
+import java.io.IOException;
 import java.net.URI;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Bridge network registry + hostname resolver for {@code http://container-b} style names.
+ * Delegates subnet/IP allocation to {@link NetworkNamespaceService}.
  */
 @ApplicationScoped
 public class BridgeResolver {
 
-    private final Map<String, NetworkBridge> bridges = new ConcurrentHashMap<>();
-    /** container name → loopback endpoint host:port (or unix path marker) */
+    private final NetworkNamespaceService namespaces;
+    /** container name → loopback endpoint host:port */
     private final Map<String, String> endpoints = new ConcurrentHashMap<>();
     private final Map<String, String> containerNetwork = new ConcurrentHashMap<>();
 
+    @Inject
+    public BridgeResolver(NetworkNamespaceService namespaces) {
+        this.namespaces = namespaces;
+    }
+
+    /** Test helper when CDI is unavailable. */
+    public BridgeResolver() {
+        this(new NetworkNamespaceService(new NoOpLoopbackAliasManager()));
+    }
+
     public NetworkBridge createNetwork(String name) {
-        return bridges.computeIfAbsent(name, NetworkBridge::new);
+        return toBridge(namespaces.createNetwork(name));
+    }
+
+    public NetworkBridge createNetwork(String name, String subnet) {
+        return toBridge(namespaces.createNetwork(name, subnet));
     }
 
     public Optional<NetworkBridge> getNetwork(String name) {
-        return Optional.ofNullable(bridges.get(name));
+        return namespaces.get(name).map(this::toBridge);
     }
 
+    /**
+     * Attach container to network with a pre-built endpoint (IP:port).
+     * Prefer {@link #attachWithIp} when starting containers.
+     */
     public void attach(String network, String containerName, String endpoint) {
-        NetworkBridge bridge = createNetwork(network);
-        bridge.attach(containerName);
+        NetworkNamespace ns = namespaces.createNetwork(network);
+        String hostPart = endpoint;
+        int colon = endpoint.indexOf(':');
+        if (colon > 0) {
+            hostPart = endpoint.substring(0, colon);
+        }
+        if (ns.subnet().contains(hostPart)) {
+            ns.claimIp(containerName, hostPart);
+        } else {
+            ns.ensureMember(containerName);
+        }
         endpoints.put(containerName, endpoint);
         containerNetwork.put(containerName, network);
     }
 
+    /**
+     * Allocate IP, apply lo0 alias, and register endpoint {@code ip:port}.
+     *
+     * @return allocated IP
+     */
+    public String attachWithIp(String network, String containerName, int containerPort) throws IOException {
+        String ip = namespaces.allocateAndAlias(network, containerName);
+        String endpoint = ip + ":" + Math.max(0, containerPort);
+        endpoints.put(containerName, endpoint);
+        containerNetwork.put(containerName, network);
+        return ip;
+    }
+
     public void detach(String containerName) {
-        String network = containerNetwork.remove(containerName);
+        containerNetwork.remove(containerName);
         endpoints.remove(containerName);
-        if (network != null) {
-            NetworkBridge bridge = bridges.get(network);
-            if (bridge != null) {
-                bridge.detach(containerName);
-            }
-        }
+        namespaces.releaseAndUnalias(containerName);
     }
 
     public Optional<String> networkOf(String containerName) {
@@ -55,36 +92,45 @@ public class BridgeResolver {
         return Optional.ofNullable(endpoints.get(containerName));
     }
 
-    /**
-     * Remove a bridge. Fails if members are still attached unless {@code force}.
-     */
+    public Optional<String> ipOf(String containerName) {
+        return namespaces.ipOf(containerName);
+    }
+
     public void removeNetwork(String name, boolean force) {
-        NetworkBridge bridge = bridges.get(name);
-        if (bridge == null) {
-            throw new IllegalArgumentException("Network not found: " + name);
-        }
-        if (!bridge.members().isEmpty() && !force) {
+        NetworkNamespace ns = namespaces.get(name)
+                .orElseThrow(() -> new IllegalArgumentException("Network not found: " + name));
+        if (!ns.members().isEmpty() && !force) {
             throw new IllegalStateException(
-                    "Network '" + name + "' has members " + bridge.members()
+                    "Network '" + name + "' has members " + ns.members()
                             + "; disconnect them or pass --force");
         }
-        for (String member : Set.copyOf(bridge.members())) {
-            detach(member);
+        for (String member : java.util.Set.copyOf(ns.members())) {
+            endpoints.remove(member);
+            containerNetwork.remove(member);
         }
-        bridges.remove(name);
+        // Also clear endpoints that referenced this network without IP alloc bookkeeping
+        containerNetwork.entrySet().removeIf(e -> {
+            if (name.equals(e.getValue())) {
+                endpoints.remove(e.getKey());
+                return true;
+            }
+            return false;
+        });
+        namespaces.removeNetwork(name, true);
     }
 
     public java.util.List<NetworkBridge> listNetworks() {
-        return bridges.values().stream().sorted(java.util.Comparator.comparing(NetworkBridge::name)).toList();
+        return namespaces.list().stream().map(this::toBridge).toList();
     }
 
-    /**
-     * Resolve a hostname or URL to a registered container endpoint on the same bridge.
-     */
     public Optional<String> resolve(String network, String hostOrUrl) {
         String host = extractHost(hostOrUrl);
-        NetworkBridge bridge = bridges.get(network);
-        if (bridge == null || !bridge.contains(host)) {
+        NetworkNamespace ns = namespaces.get(network).orElse(null);
+        if (ns == null || !ns.contains(host)) {
+            // Fall back to endpoint registry by name even if IP not in members set
+            if (ns != null && endpoints.containsKey(host) && network.equals(containerNetwork.get(host))) {
+                return Optional.ofNullable(endpoints.get(host));
+            }
             return Optional.empty();
         }
         return Optional.ofNullable(endpoints.get(host));
@@ -118,6 +164,14 @@ public class BridgeResolver {
     }
 
     public Map<String, NetworkBridge> bridges() {
-        return Map.copyOf(bridges);
+        Map<String, NetworkBridge> map = new ConcurrentHashMap<>();
+        for (NetworkBridge b : listNetworks()) {
+            map.put(b.name(), b);
+        }
+        return Map.copyOf(map);
+    }
+
+    private NetworkBridge toBridge(NetworkNamespace ns) {
+        return new NetworkBridge(ns.name(), ns.cidr(), ns.gateway(), ns.members(), ns.memberIps());
     }
 }

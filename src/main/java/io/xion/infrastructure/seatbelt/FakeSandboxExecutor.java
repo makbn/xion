@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -22,7 +23,7 @@ public class FakeSandboxExecutor implements SandboxExecutor {
 
     @Override
     public SpawnedProcess spawn(Path profileFile, String binary, List<String> args, Path workDir,
-                                Path stdoutLog, Path stderrLog) throws Exception {
+                                Path stdoutLog, Path stderrLog, Map<String, String> env) throws Exception {
         Files.createDirectories(workDir);
         if (stdoutLog != null) {
             Files.createDirectories(stdoutLog.getParent());
@@ -37,6 +38,9 @@ public class FakeSandboxExecutor implements SandboxExecutor {
         }
         ProcessBuilder pb = new ProcessBuilder(command);
         pb.directory(workDir.toFile());
+        if (env != null && !env.isEmpty()) {
+            pb.environment().putAll(env);
+        }
         if (stdoutLog != null) {
             pb.redirectOutput(stdoutLog.toFile());
         } else {
