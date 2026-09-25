@@ -9,6 +9,7 @@ import io.xion.domain.ContainerStatus;
 import io.xion.domain.PortMapping;
 import io.xion.domain.ResourceLimits;
 import io.xion.domain.RestartPolicy;
+import io.xion.domain.SandboxProfile;
 import io.xion.domain.VolumeMount;
 import io.xion.infrastructure.network.BridgeResolver;
 import io.xion.infrastructure.process.RuntimePaths;
@@ -66,6 +67,10 @@ public class CreateContainerHandler implements RequestHandler<CreateContainerCom
         Optional<String> workdir = request.workdir() == null ? Optional.empty() : request.workdir();
         boolean autoRemove = request.autoRemove();
         RestartPolicy restart = request.restartPolicy() == null ? RestartPolicy.NO : request.restartPolicy();
+        SandboxProfile sandbox = request.sandboxProfile() == null
+                ? SandboxProfile.STRICT
+                : request.sandboxProfile();
+        List<String> writablePaths = request.writablePaths() == null ? List.of() : request.writablePaths();
 
         ObjectNode json = mapper.createObjectNode();
         json.put("id", id);
@@ -113,6 +118,9 @@ public class CreateContainerHandler implements RequestHandler<CreateContainerCom
         }
         json.put("autoRemove", autoRemove);
         json.put("restartPolicy", restart.wire());
+        json.put("sandboxProfile", sandbox.wire());
+        ArrayNode writableNode = json.putArray("writablePaths");
+        writablePaths.forEach(writableNode::add);
 
         network.ifPresent(bridges::createNetwork);
         ContainerRecord record = new ContainerRecord(

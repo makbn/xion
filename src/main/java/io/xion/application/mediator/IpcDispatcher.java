@@ -32,6 +32,7 @@ import io.xion.domain.ContainerRecord;
 import io.xion.domain.PortMapping;
 import io.xion.domain.ResourceLimits;
 import io.xion.domain.RestartPolicy;
+import io.xion.domain.SandboxProfile;
 import io.xion.domain.VolumeMount;
 import io.xion.infrastructure.ipc.IpcEnvelope;
 import io.xion.infrastructure.process.EnvFileParser;
@@ -162,6 +163,15 @@ public class IpcDispatcher {
         } else if (payload.hasNonNull("restart")) {
             restartPolicy = RestartPolicy.parse(payload.get("restart").asText());
         }
+        SandboxProfile sandboxProfile = SandboxProfile.STRICT;
+        if (payload.hasNonNull("sandboxProfile")) {
+            sandboxProfile = SandboxProfile.parse(payload.get("sandboxProfile").asText());
+        } else if (payload.hasNonNull("sandbox")) {
+            sandboxProfile = SandboxProfile.parse(payload.get("sandbox").asText());
+        }
+        List<String> writablePaths = new ArrayList<>();
+        payload.path("writablePaths").forEach(n -> writablePaths.add(n.asText()));
+        payload.path("writablePath").forEach(n -> writablePaths.add(n.asText()));
 
         return new CreateContainerCommand(
                 payload.path("name").asText(null),
@@ -174,7 +184,9 @@ public class IpcDispatcher {
                 env,
                 workdir,
                 autoRemove,
-                restartPolicy);
+                restartPolicy,
+                sandboxProfile,
+                writablePaths);
     }
 
     private JsonNode toJson(Object result) {

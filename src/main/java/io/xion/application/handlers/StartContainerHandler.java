@@ -10,6 +10,7 @@ import io.xion.domain.ContainerStatus;
 import io.xion.domain.PortMapping;
 import io.xion.domain.ResourceLimits;
 import io.xion.domain.RestartPolicy;
+import io.xion.domain.SandboxProfile;
 import io.xion.domain.VolumeMount;
 import io.xion.infrastructure.network.BridgeResolver;
 import io.xion.infrastructure.network.PortProxy;
@@ -18,6 +19,7 @@ import io.xion.infrastructure.process.RuntimePaths;
 import io.xion.infrastructure.resources.ResourceGovernor;
 import io.xion.infrastructure.seatbelt.SandboxExecutor;
 import io.xion.infrastructure.seatbelt.SeatbeltProfileGenerator;
+import io.xion.infrastructure.seatbelt.SeatbeltProfileValidator;
 import io.xion.infrastructure.store.ContainerStore;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;
@@ -30,6 +32,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
@@ -115,66 +118,88 @@ public class StartContainerHandler implements RequestHandler<StartContainerComma
             }
 
             String targetHost = allocatedIp != null ? allocatedIp : "127.0.0.1";
+            profileGenerator.ensureWritablePaths(profile.writablePaths());
             Path sb = profileGenerator.writeProfile(profile, proxyPort, allocatedIp);
+            validateSeatbeltIfDarwin(sb);
 
-            resourceGovernor.apply(profile.limits());
+            try {
+                // Limits are applied only via wrapCommand (child-scoped). Never setrlimit the daemon.
+                List<String> command = new ArrayList<>();
+                command.add(profile.binary());
+                command.addAll(profile.args());
+                List<String> wrapped = resourceGovernor.wrapCommand(command, profile.limits());
+                String binary = wrapped.getFirst();
+                List<String> args = wrapped.size() > 1 ? wrapped.subList(1, wrapped.size()) : List.of();
 
-            List<String> command = new ArrayList<>();
-            command.add(profile.binary());
-            command.addAll(profile.args());
-            List<String> wrapped = resourceGovernor.wrapCommand(command, profile.limits());
-            String binary = wrapped.getFirst();
-            List<String> args = wrapped.size() > 1 ? wrapped.subList(1, wrapped.size()) : List.of();
+                // Profile env first; XION_* / PORT / TMP* win on conflict (executor also remaps TMP*).
+                Map<String, String> env = new HashMap<>(profile.env());
+                env.put("TMPDIR", "/tmp");
+                env.put("TMP", "/tmp");
+                env.put("TEMP", "/tmp");
+                if (allocatedIp != null) {
+                    env.put("XION_IP", allocatedIp);
+                    profile.network().ifPresent(n -> env.put("XION_NETWORK", n));
+                }
+                if (firstContainerPort > 0) {
+                    env.put("PORT", Integer.toString(firstContainerPort));
+                }
 
-            // Profile env first; XION_* / PORT win on conflict.
-            Map<String, String> env = new HashMap<>(profile.env());
-            if (allocatedIp != null) {
-                env.put("XION_IP", allocatedIp);
-                profile.network().ifPresent(n -> env.put("XION_NETWORK", n));
+                Path workDir = profile.workdir()
+                        .map(Path::of)
+                        .orElse(paths.containerDir(record.id()));
+
+                SandboxExecutor.SpawnedProcess spawned = sandboxExecutor.spawn(
+                        sb,
+                        binary,
+                        args,
+                        workDir,
+                        paths.stdoutLog(record.id()),
+                        paths.stderrLog(record.id()),
+                        env);
+
+                processRegistry.register(record.id(), spawned.process());
+                if (lifecycleWatcher != null && !lifecycleWatcher.isUnsatisfied()) {
+                    lifecycleWatcher.get().onStart(record.id(), spawned.process());
+                }
+
+                if (!profile.ports().isEmpty()) {
+                    PortProxy proxy = new PortProxy();
+                    proxy.start(profile.ports(), targetHost);
+                    processRegistry.registerProxy(record.id(), proxy);
+                }
+
+                ContainerRecord updated = record
+                        .withStatus(ContainerStatus.RUNNING)
+                        .withPid(spawned.pid())
+                        .withStartedAt(Instant.now());
+                if (allocatedIp != null) {
+                    updated = updated.withProfileJson(withIp(record.profileJson(), allocatedIp));
+                }
+                store.update(updated);
+                return new StartContainerResult(record.id(), record.name(), spawned.pid(), ContainerStatus.RUNNING.name());
+            } catch (Exception spawnEx) {
+                throw new IllegalStateException(
+                        "Failed to start container (sandbox profile=" + profile.sandboxProfile().wire()
+                                + ", seatbelt=" + sb + "): " + spawnEx.getMessage(),
+                        spawnEx);
             }
-            if (firstContainerPort > 0) {
-                env.put("PORT", Integer.toString(firstContainerPort));
-            }
-
-            Path workDir = profile.workdir()
-                    .map(Path::of)
-                    .orElse(paths.containerDir(record.id()));
-
-            SandboxExecutor.SpawnedProcess spawned = sandboxExecutor.spawn(
-                    sb,
-                    binary,
-                    args,
-                    workDir,
-                    paths.stdoutLog(record.id()),
-                    paths.stderrLog(record.id()),
-                    env);
-
-            processRegistry.register(record.id(), spawned.process());
-            if (lifecycleWatcher != null && !lifecycleWatcher.isUnsatisfied()) {
-                lifecycleWatcher.get().onStart(record.id(), spawned.process());
-            }
-
-            if (!profile.ports().isEmpty()) {
-                PortProxy proxy = new PortProxy();
-                proxy.start(profile.ports(), targetHost);
-                processRegistry.registerProxy(record.id(), proxy);
-            }
-
-            ContainerRecord updated = record
-                    .withStatus(ContainerStatus.RUNNING)
-                    .withPid(spawned.pid())
-                    .withStartedAt(Instant.now());
-            if (allocatedIp != null) {
-                updated = updated.withProfileJson(withIp(record.profileJson(), allocatedIp));
-            }
-            store.update(updated);
-            return new StartContainerResult(record.id(), record.name(), spawned.pid(), ContainerStatus.RUNNING.name());
         } catch (Exception e) {
             if (allocatedIp != null) {
                 bridges.detach(profile.name());
             }
+            if (e instanceof IllegalStateException ise) {
+                throw ise;
+            }
             throw new IllegalStateException("Failed to start container: " + e.getMessage(), e);
         }
+    }
+
+    private static void validateSeatbeltIfDarwin(Path sb) throws Exception {
+        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+        if (!os.contains("mac")) {
+            return;
+        }
+        SeatbeltProfileValidator.validateOrThrow(sb);
     }
 
     private String withIp(String profileJson, String ip) {
@@ -258,6 +283,16 @@ public class StartContainerHandler implements RequestHandler<StartContainerComma
             if (node.hasNonNull("restartPolicy")) {
                 restartPolicy = RestartPolicy.parse(node.get("restartPolicy").asText());
             }
+            SandboxProfile sandboxProfile = SandboxProfile.STRICT;
+            if (node.hasNonNull("sandboxProfile")) {
+                sandboxProfile = SandboxProfile.parse(node.get("sandboxProfile").asText());
+            } else if (node.hasNonNull("sandbox")) {
+                sandboxProfile = SandboxProfile.parse(node.get("sandbox").asText());
+            }
+            List<String> writablePaths = new ArrayList<>();
+            if (node.has("writablePaths")) {
+                node.get("writablePaths").forEach(p -> writablePaths.add(p.asText()));
+            }
 
             return new ContainerProfile(
                     record.id(),
@@ -272,7 +307,9 @@ public class StartContainerHandler implements RequestHandler<StartContainerComma
                     env,
                     workdir,
                     autoRemove,
-                    restartPolicy);
+                    restartPolicy,
+                    sandboxProfile,
+                    writablePaths);
         } catch (Exception e) {
             return new ContainerProfile(
                     record.id(),

@@ -33,6 +33,7 @@ import java.util.concurrent.Callable;
         footer = {
                 "  xion run --name web -p 8080:80 --memory 256m --cpus 1 -- /usr/bin/sleep 3600",
                 "  xion run -v /host/data:/data:ro --network frontend -- /usr/local/bin/app",
+                "  xion run --sandbox-profile=relay -p 8080:8080 -- /bin/bash ./start.sh",
                 "  xion docker --yes --allow-partial -- run -d -p 8080:80 nginx"
         })
 public class RunCommand implements Callable<Integer> {
@@ -77,13 +78,13 @@ public class RunCommand implements Callable<Integer> {
     @CommandLine.Option(
             names = {"--memory", "-m"},
             paramLabel = "LIMIT",
-            description = "Memory limit (e.g. 512m, 1g, 256Mi). Applied via setrlimit on Darwin.")
+            description = "Memory limit (e.g. 512m, 1g, 256Mi). Applied to the child only (not the daemon).")
     String memory;
 
     @CommandLine.Option(
             names = {"--cpus"},
             paramLabel = "FLOAT",
-            description = "CPU budget hint (e.g. 1.5). On macOS wraps spawn with taskpolicy and CPU rlimit.")
+            description = "CPU budget hint (e.g. 1.5). On macOS wraps the child with /usr/sbin/taskpolicy.")
     Double cpus;
 
     @CommandLine.Option(
@@ -114,6 +115,27 @@ public class RunCommand implements Callable<Integer> {
             paramLabel = "POLICY",
             description = "Restart policy: no|on-failure[:N]|always|unless-stopped.")
     String restart;
+
+    @CommandLine.Option(
+            names = {"--sandbox-profile", "--sandbox"},
+            paramLabel = "PROFILE",
+            description = {
+                    "Seatbelt preset: strict (default) or relay.",
+                    "Use relay for trusted local apps that need host toolchain reads",
+                    "(Node, Homebrew ffmpeg/VideoToolbox) and outbound internet.",
+                    "Aliases: network-relay, devtools → relay."
+            })
+    String sandboxProfile;
+
+    @CommandLine.Option(
+            names = {"--writable-path"},
+            paramLabel = "PATH",
+            description = {
+                    "Absolute host path to create (if missing) and allow writes under Seatbelt.",
+                    "Use for Docker-style absolute data dirs that are not covered by -v.",
+                    "Repeatable. Also configurable via xion.sandbox.extra-writable-paths."
+            })
+    List<String> writablePaths = new ArrayList<>();
 
     @CommandLine.Parameters(
             index = "0",
@@ -169,6 +191,13 @@ public class RunCommand implements Callable<Integer> {
         }
         if (restart != null) {
             create.put("restartPolicy", restart);
+        }
+        if (sandboxProfile != null) {
+            create.put("sandboxProfile", sandboxProfile);
+        }
+        if (!writablePaths.isEmpty()) {
+            ArrayNode wp = create.putArray("writablePaths");
+            writablePaths.forEach(wp::add);
         }
         var created = client.send("create", create);
         if (!created.ok()) {

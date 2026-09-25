@@ -79,6 +79,14 @@ public class CreateCommand implements Callable<Integer> {
             description = "Restart policy: no|on-failure[:N]|always|unless-stopped.")
     String restart;
 
+    @CommandLine.Option(names = {"--sandbox-profile", "--sandbox"}, paramLabel = "PROFILE",
+            description = "Seatbelt preset: strict (default) or relay (aliases: network-relay, devtools).")
+    String sandboxProfile;
+
+    @CommandLine.Option(names = {"--writable-path"}, paramLabel = "PATH",
+            description = "Absolute host path to create and Seatbelt-allow for writes. Repeatable.")
+    List<String> writablePaths = new ArrayList<>();
+
     @CommandLine.Parameters(index = "0", paramLabel = "BINARY",
             description = "Host executable path or PATH name.")
     String binary;
@@ -128,6 +136,13 @@ public class CreateCommand implements Callable<Integer> {
         }
         if (restart != null) {
             create.put("restartPolicy", restart);
+        }
+        if (sandboxProfile != null) {
+            create.put("sandboxProfile", sandboxProfile);
+        }
+        if (!writablePaths.isEmpty()) {
+            ArrayNode wp = create.putArray("writablePaths");
+            writablePaths.forEach(wp::add);
         }
         var created = client.send("create", create);
         if (!created.ok()) {
