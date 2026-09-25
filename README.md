@@ -270,19 +270,42 @@ Defaults that real macOS / Node apps need (shipped in both `strict` and `relay`)
 - forced `TMPDIR=/tmp` on every Darwin spawn (curated env — not the full daemon environ)
 
 
+## Daemon operations (always-on hosts)
+
+```bash
+# One-shot background (survives terminal close; not reboot)
+xion daemon start
+xion daemon stop
+
+# Supervised (macOS launchd KeepAlive — survives reboot and kill -9)
+xion daemon install
+xion daemon doctor
+xion daemon uninstall
+```
+
+`daemon start` detaches by default (`~/.xion/xion.pid`, `~/.xion/daemon.log`).
+Stale sockets are removed when the pidfile is dead so tunnels do not keep
+hitting a ghost UDS (502). Use `--foreground` only to debug.
+
+Published `-p` traffic is still a **userspace** reverse proxy (bounded workers,
+large buffers, metrics on `xion inspect`). Kernel/host-network publish is not
+implemented yet — for peak HLS fan-out, treat current `-p` as “good bulk TCP,”
+not bit-identical to Docker publish.
+
 ## Example workflow
 
 ```bash
-# Terminal 1
-xion daemon start
-
-# Terminal 2
+xion daemon install        # recommended on Mac mini / studio
+# or: xion daemon start
 xion network create frontend
 xion run \
   --name web --network frontend -p 8080:80 --memory 256m --cpus 1 \
+  --sandbox-profile=relay \
   -- /usr/bin/sleep 60
 xion ps
+xion inspect web           # includes proxy metrics when running
 xion logs web
 xion stop web
 xion rm web
+xion daemon stop           # if not using launchd KeepAlive
 ```
