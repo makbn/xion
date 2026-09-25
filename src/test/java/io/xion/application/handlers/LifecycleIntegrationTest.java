@@ -7,12 +7,14 @@ import io.xion.application.mediator.Mediator;
 import io.xion.domain.ResourceLimits;
 import io.xion.infrastructure.resources.FakeResourceGovernor;
 import io.xion.infrastructure.seatbelt.FakeSandboxExecutor;
+import io.xion.infrastructure.store.ContainerStore;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -32,6 +34,9 @@ class LifecycleIntegrationTest {
     FakeResourceGovernor fakeResourceGovernor;
 
     @Inject
+    ContainerStore store;
+
+    @Inject
     ObjectMapper mapper;
 
     @Inject
@@ -41,6 +46,8 @@ class LifecycleIntegrationTest {
     void setUp() throws Exception {
         fakeSandboxExecutor.clear();
         fakeResourceGovernor.clear();
+        // Clear leftover rows from prior JVM runs sharing the same SQLite file
+        store.listAll().forEach(c -> store.delete(c.id()));
         if (!daemonService.isRunning()) {
             daemonService.start();
         }
@@ -48,8 +55,9 @@ class LifecycleIntegrationTest {
 
     @Test
     void createStartListStopViaMediator() {
+        String name = "echo-" + UUID.randomUUID().toString().substring(0, 8);
         CreateContainerResult created = mediator.send(new CreateContainerCommand(
-                "echo-box",
+                name,
                 "sleep",
                 List.of("2"),
                 List.of(),
@@ -74,16 +82,19 @@ class LifecycleIntegrationTest {
 
     @Test
     void ipcCreateAndPs() throws Exception {
+        String name = "ipc-" + UUID.randomUUID().toString().substring(0, 8);
         var create = client.object();
-        create.put("name", "ipc-box");
+        create.put("name", name);
         create.put("binary", "sleep");
         create.putArray("args").add("1");
         var created = client.send("create", create);
-        assertThat(created.ok()).isTrue();
+        assertThat(created.ok())
+                .as("create error: %s", created.error())
+                .isTrue();
         assertThat(created.payload().get("id").asText()).isNotBlank();
 
         var ps = client.send("ps", client.object());
         assertThat(ps.ok()).isTrue();
-        assertThat(ps.payload().path("containers").toString()).contains("ipc-box");
+        assertThat(ps.payload().path("containers").toString()).contains(name);
     }
 }
